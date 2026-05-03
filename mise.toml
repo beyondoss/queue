@@ -107,7 +107,6 @@ until docker exec bq-bench-ext pg_isready -U postgres > /dev/null 2>&1; do sleep
 
 echo "Loading schemas..."
 docker exec -i bq-bench psql -U postgres < "$OSS_PGMQ_SQL" > /dev/null
-docker exec bq-bench psql -U postgres -c "ALTER SCHEMA pgmq RENAME TO queue;" > /dev/null
 docker exec -i bq-bench-ext psql -U postgres < beyond-queue-extension/sql/schema.sql > /dev/null
 docker exec -i bq-bench-ext psql -U postgres < tests/fixtures/hot_paths.sql > /dev/null
 docker exec -i bq-bench-ext psql -U postgres < tests/fixtures/load_pgrx_extension.sql > /dev/null
@@ -119,6 +118,7 @@ echo ""
 echo "=== baseline (real pgmq PL/pgSQL) ==="
 cargo run --release -p bench -- \
   --database-url "$BASELINE_URL" \
+  --schema pgmq \
   run-all --profile "$PROFILE" --output bench/out/baseline.json $EXTRA_ARGS
 
 echo ""
