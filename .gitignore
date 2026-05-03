@@ -1,0 +1,42 @@
+# Rust
+/target/
+/target-alpine/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock
+
+# TypeScript / Node
+node_modules/
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Package managers
+.npm/
+.yarn/
+.pnp.*
+yarn-error.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+.wiki
+.mcp.json

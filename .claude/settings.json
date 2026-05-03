@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo clippy *)",
+      "Bash(sudo journalctl *)",
+      "Bash(mise tasks)",
+      "Bash(cargo tree *)"
+    ]
+  }
+}

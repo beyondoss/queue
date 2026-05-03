@@ -1,0 +1,61 @@
+[workspace]
+members = ["pgmq-extension", "bench", "xtask"]
+resolver = "2"
+
+[package]
+name = "pgmq-rx"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "pgmq with pgrx hot paths and an SQS-compatible REST API"
+
+[[bin]]
+name = "pgmq-rx"
+path = "src/main.rs"
+
+[lib]
+name = "pgmq_rx"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+form_urlencoded = "1"
+md5 = "0.7"
+clap = { version = "4", features = ["derive", "env"] }
+opentelemetry = { version = "0.27", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+prometheus = "0.13"
+quick-xml = { version = "0.37", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+sqlx = { version = "0.8", features = [
+    "postgres",
+    "runtime-tokio",
+    "chrono",
+    "json",
+    "migrate",
+] }
+thiserror = "2"
+tikv-jemallocator = "0.6"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = [
+    "catch-panic",
+    "request-id",
+    "timeout",
+    "trace",
+] }
+tracing = "0.1"
+tracing-opentelemetry = "0.28"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

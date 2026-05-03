@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pgmq.send_topic($1, $2::jsonb, $3::jsonb, $4) AS \"queues_matched!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "queues_matched!: i64",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2b8c08b18244dd9a917f8a673baacc3b93731e2a6a3c51c331c204c869d471e5"
+}

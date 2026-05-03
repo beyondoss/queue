@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            msg_id  AS \"msg_id!: i64\",\n            vt      AS \"visible_at!: DateTime<Utc>\"\n        FROM pgmq.set_vt($1::text, $2::bigint, $3::int)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "msg_id!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "visible_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "a34c36d4cc53a66882738bc55fc0555d0956b37f58f464e058ac2a00966566f7"
+}

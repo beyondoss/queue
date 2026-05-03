@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pgmq.create_fifo($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "create_fifo",
+        "type_info": "Void"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5f77431b22dfc5ad6c1d24dc084b74ec5807f2aab203e0a237fb79a3ea75a92d"
+}

@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            msg_id          AS \"msg_id!: i64\",\n            read_ct         AS \"read_count!: i32\",\n            enqueued_at     AS \"enqueued_at!: DateTime<Utc>\",\n            vt              AS \"visible_at!: DateTime<Utc>\",\n            message         AS \"message!: serde_json::Value\",\n            headers         AS \"headers?: serde_json::Value\"\n        FROM pgmq.read_fifo_with_poll($1, $2, $3, $4, 100)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "msg_id!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "read_count!: i32",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "enqueued_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "visible_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "message!: serde_json::Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "headers?: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0b50d64b5206a1a4b167ed83e6ba9137d11c217edc907f9f0a41a93b5921051d"
+}

@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_VERSION: "0.8"
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: dprint check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (api)
+        run: cargo clippy -p pgmq-rx -- -D warnings
+        env:
+          SQLX_OFFLINE: "true"
+      - name: Clippy (extension)
+        run: cargo clippy -p pgmq-extension --features pg17 -- -D warnings
+
+  test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgmq_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres
+      - name: Install pgmq extension
+        run: |
+          sudo apt-get install -y postgresql-server-dev-17
+          cargo install cargo-pgrx --version "=0.18.0"
+          cargo pgrx init --pg17 pg_config
+          cargo pgrx install -p pgmq-extension --features pg17
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/pgmq_test
+      - name: Run integration tests
+        run: cargo test --test integration
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/pgmq_test
+
+  sqlx-prepare-check:
+    name: sqlx offline cache up-to-date
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgmq_sqlx
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres
+      - name: Check sqlx prepare is up to date
+        run: cargo sqlx prepare --check --workspace
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/pgmq_sqlx

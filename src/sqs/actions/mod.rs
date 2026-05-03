@@ -1,0 +1,13 @@
+pub mod change_message_visibility;
+pub mod change_message_visibility_batch;
+pub mod create_queue;
+pub mod delete_message;
+pub mod delete_message_batch;
+pub mod delete_queue;
+pub mod get_queue_attributes;
+pub mod get_queue_url;
+pub mod list_queues;
+pub mod purge_queue;
+pub mod receive_message;
+pub mod send_message;
+pub mod send_message_batch;

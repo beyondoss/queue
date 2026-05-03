@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            queue_name      AS \"queue_name!: String\",\n            is_partitioned  AS \"is_partitioned!: bool\",\n            is_unlogged     AS \"is_unlogged!: bool\",\n            created_at      AS \"created_at!: DateTime<Utc>\"\n        FROM pgmq.list_queues()\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "queue_name!: String",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_partitioned!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_unlogged!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "b8b7405ef5b117b8a651325fe156f8565c3c4c8c867ca3eb72e5ad9b6809c005"
+}

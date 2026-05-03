@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pgmq.send($1, $2::jsonb, $3::jsonb, clock_timestamp() + make_interval(secs => $4), $5) AS \"msg_id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "msg_id!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Float8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fc746b55e084d6df30d16886fe4ae436a320618f887cff83c896304875400de3"
+}
