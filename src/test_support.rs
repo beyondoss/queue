@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 
-use crate::config::Config;
 use crate::AppState;
+use crate::config::Config;
 
 pub struct TestServer {
     pub url: String,

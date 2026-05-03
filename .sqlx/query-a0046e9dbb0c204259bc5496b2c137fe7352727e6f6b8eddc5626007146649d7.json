@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            msg_id  AS \"msg_id!: i64\",\n            vt      AS \"visible_at!: DateTime<Utc>\"\n        FROM queue.set_vt($1::text, $2::bigint, $3::int)\n        ",
+  "query": "\n        SELECT\n            msg_id  AS \"msg_id!: i64\",\n            vt      AS \"visible_at!: DateTime<Utc>\"\n        FROM queue.change_visibility($1::text, $2::bigint, $3::int)\n        ",
   "describe": {
     "columns": [
       {
@@ -26,5 +26,5 @@
       null
     ]
   },
-  "hash": "a34c36d4cc53a66882738bc55fc0555d0956b37f58f464e058ac2a00966566f7"
+  "hash": "a0046e9dbb0c204259bc5496b2c137fe7352727e6f6b8eddc5626007146649d7"
 }

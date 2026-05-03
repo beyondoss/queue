@@ -1,10 +1,8 @@
 name: Release Extension
-
 on:
   push:
     tags:
       - "ext-v*"
-
 jobs:
   build:
     name: Build pg${{ matrix.pg }} / ${{ matrix.target }}
@@ -13,38 +11,30 @@ jobs:
       matrix:
         pg: [17, 18]
         target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Install pgrx build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-server-dev-${{ matrix.pg }} \
             gcc-aarch64-linux-gnu
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - uses: Swatinem/rust-cache@v2
-
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx --version "=0.18.0"
-
       - name: Build extension
         run: |
           cargo pgrx package -p pgmq-extension --features pg${{ matrix.pg }} \
             --pg-config $(which pg_config)
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-
       - name: Upload .so
         uses: actions/upload-artifact@v4
         with:
           name: pgmq-extension-pg${{ matrix.pg }}-${{ matrix.target }}
           path: target/release/pgmq-extension-pg${{ matrix.pg }}/**
-
   release:
     needs: build
     runs-on: ubuntu-latest

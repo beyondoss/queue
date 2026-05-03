@@ -1,18 +1,22 @@
 use axum::extract::State;
 use axum::response::IntoResponse;
 
+use crate::AppState;
 use crate::ops::queue_admin;
 use crate::sqs::context::SqsContext;
 use crate::sqs::error::SqsError;
 use crate::sqs::types::{CreateQueueRequest, CreateQueueResponse};
-use crate::AppState;
 
 pub async fn handle(
     State(state): State<AppState>,
     ctx: SqsContext,
     req: CreateQueueRequest,
 ) -> Result<impl IntoResponse, SqsError> {
-    let is_fifo = req.attributes.get("FifoQueue").map(|v| v == "true").unwrap_or(false);
+    let is_fifo = req
+        .attributes
+        .get("FifoQueue")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let internal_name = if is_fifo {
         req.queue_name

@@ -1,12 +1,12 @@
 use axum::extract::State;
 use axum::response::IntoResponse;
 
+use crate::AppState;
 use crate::ops::queue_admin;
 use crate::sqs::context::SqsContext;
 use crate::sqs::error::SqsError;
 use crate::sqs::types::PurgeQueueRequest;
 use crate::sqs::util::queue_name_from_url;
-use crate::AppState;
 
 pub async fn handle(
     State(state): State<AppState>,

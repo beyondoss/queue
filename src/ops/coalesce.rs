@@ -33,7 +33,14 @@ impl Coalescer {
     ) -> Result<i64, ApiError> {
         let (tx, rx) = oneshot::channel();
         self.0
-            .send(PendingMessage { queue_name, message, headers, delay, sync_commit, tx })
+            .send(PendingMessage {
+                queue_name,
+                message,
+                headers,
+                delay,
+                sync_commit,
+                tx,
+            })
             .await
             .map_err(|_| ApiError::Internal(anyhow::anyhow!("coalescer channel closed")))?;
         rx.await

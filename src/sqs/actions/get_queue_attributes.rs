@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use axum::extract::State;
 use axum::response::IntoResponse;
 
+use crate::AppState;
 use crate::ops::queue_admin;
 use crate::sqs::context::SqsContext;
 use crate::sqs::error::{SqsError, SqsErrorCode};
 use crate::sqs::types::{GetQueueAttributesRequest, GetQueueAttributesResponse};
 use crate::sqs::util::queue_name_from_url;
-use crate::AppState;
 
 pub async fn handle(
     State(state): State<AppState>,
@@ -24,8 +24,7 @@ pub async fn handle(
             other => ctx.internal_error(other),
         })?;
 
-    let want_all = req.attribute_names.is_empty()
-        || req.attribute_names.iter().any(|n| n == "All");
+    let want_all = req.attribute_names.is_empty() || req.attribute_names.iter().any(|n| n == "All");
 
     let mut attributes: HashMap<String, String> = HashMap::new();
 

@@ -7,10 +7,10 @@ pub mod routes;
 pub mod sqs;
 pub mod test_support;
 
+use axum::Router;
 use axum::middleware::from_fn;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
 use clap::Parser;
 use sqlx::PgPool;
 use tracing_subscriber::EnvFilter;

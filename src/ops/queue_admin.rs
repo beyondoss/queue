@@ -35,10 +35,9 @@ pub async fn create_fifo_queue(pool: &PgPool, queue_name: &str) -> Result<(), Ap
     Ok(())
 }
 
-
-pub async fn drop_queue(pool: &PgPool, queue_name: &str) -> Result<bool, ApiError> {
+pub async fn delete_queue(pool: &PgPool, queue_name: &str) -> Result<bool, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT queue.drop_queue($1) AS "dropped!: bool""#,
+        r#"SELECT queue.delete_queue($1) AS "dropped!: bool""#,
         queue_name,
     )
     .fetch_one(pool)
@@ -72,10 +71,7 @@ pub async fn list_queues(pool: &PgPool) -> Result<Vec<QueueInfo>, ApiError> {
         .collect())
 }
 
-pub async fn get_queue_metrics(
-    pool: &PgPool,
-    queue_name: &str,
-) -> Result<QueueMetrics, ApiError> {
+pub async fn get_queue_metrics(pool: &PgPool, queue_name: &str) -> Result<QueueMetrics, ApiError> {
     let row = sqlx::query!(
         r#"
         SELECT

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT queue.drop_queue($1) AS \"dropped!: bool\"",
+  "query": "SELECT queue.delete_queue($1) AS \"dropped!: bool\"",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "bad9ffd3b568d49b7ac64efe6ee27d4301ccbac5a0dccca85388801aa9784b76"
+  "hash": "6f5954da555c8ef00e91a3cc134e195ed4f203278ff885d25e4b95b33eb51c5f"
 }

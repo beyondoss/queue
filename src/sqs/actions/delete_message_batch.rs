@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::response::IntoResponse;
 
+use crate::AppState;
 use crate::ops::delete;
 use crate::sqs::context::SqsContext;
 use crate::sqs::error::{SqsError, SqsErrorCode};
@@ -8,7 +9,6 @@ use crate::sqs::receipt;
 use crate::sqs::types::{
     DeleteMessageBatchRequest, DeleteMessageBatchResponse, DeleteMessageBatchResultEntry,
 };
-use crate::AppState;
 
 pub async fn handle(
     State(state): State<AppState>,

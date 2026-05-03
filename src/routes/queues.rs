@@ -1,12 +1,12 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::error::ApiError;
 use crate::ops::queue_admin;
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct CreateQueueRequest {
@@ -78,7 +78,7 @@ pub async fn delete_queue(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let dropped = queue_admin::drop_queue(&state.pool, &name).await?;
+    let dropped = queue_admin::delete_queue(&state.pool, &name).await?;
     if dropped {
         Ok(StatusCode::NO_CONTENT)
     } else {

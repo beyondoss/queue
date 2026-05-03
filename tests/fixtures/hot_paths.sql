@@ -148,8 +148,8 @@ $$;
 -- Vec<T> before returning (pgrx's 'static constraint), then convert each datum back.
 -- PL/pgSQL RETURN QUERY EXECUTE copies whole heap tuples once. Benchmarks confirm
 -- pgrx read is 6.7× slower single-threaded and ~46% slower end-to-end vs this.
--- pgrx read_with_poll is kept: WaitLatch cannot be implemented in PL/pgSQL.
-CREATE OR REPLACE FUNCTION queue.read(
+-- pgrx receive (5-arg) is kept: WaitLatch cannot be implemented in PL/pgSQL.
+CREATE OR REPLACE FUNCTION queue.receive(
     queue_name  TEXT,
     vt          INTEGER,
     qty         INTEGER,
@@ -193,11 +193,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- read_with_poll: (TEXT, INTEGER, INTEGER, INTEGER, INTEGER, JSONB) -> SETOF queue.message_record
+-- receive: (TEXT, INTEGER, INTEGER, INTEGER, INTEGER, JSONB) -> SETOF queue.message_record
 -- SQL fallback used when the pgrx extension is not in shared_preload_libraries.
 -- The pgrx version uses WaitLatch for true push-based wakeup (no busy polling);
 -- this version falls back to pg_sleep intervals. Both share the same read SQL.
-CREATE OR REPLACE FUNCTION queue.read_with_poll(
+CREATE OR REPLACE FUNCTION queue.receive(
     queue_name       TEXT,
     vt               INTEGER,
     qty              INTEGER,
@@ -356,8 +356,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- set_vt (timestamp): (TEXT, BIGINT, TIMESTAMPTZ) -> SETOF queue.message_record
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_id BIGINT, vt TIMESTAMP WITH TIME ZONE)
+-- change_visibility (timestamp): (TEXT, BIGINT, TIMESTAMPTZ) -> SETOF queue.message_record
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_id BIGINT, vt TIMESTAMP WITH TIME ZONE)
 RETURNS SETOF queue.message_record AS $$
 DECLARE
     sql    TEXT;
@@ -374,14 +374,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- set_vt (seconds): (TEXT, BIGINT, INTEGER) -> SETOF queue.message_record
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_id BIGINT, vt INTEGER)
+-- change_visibility (seconds): (TEXT, BIGINT, INTEGER) -> SETOF queue.message_record
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_id BIGINT, vt INTEGER)
 RETURNS SETOF queue.message_record LANGUAGE sql AS $$
-    SELECT * FROM queue.set_vt(queue_name, msg_id, clock_timestamp() + make_interval(secs => vt));
+    SELECT * FROM queue.change_visibility(queue_name, msg_id, clock_timestamp() + make_interval(secs => vt));
 $$;
 
--- set_vt batch (timestamp): (TEXT, BIGINT[], TIMESTAMPTZ) -> SETOF queue.message_record
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_ids BIGINT[], vt TIMESTAMP WITH TIME ZONE)
+-- change_visibility batch (timestamp): (TEXT, BIGINT[], TIMESTAMPTZ) -> SETOF queue.message_record
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_ids BIGINT[], vt TIMESTAMP WITH TIME ZONE)
 RETURNS SETOF queue.message_record AS $$
 DECLARE
     sql    TEXT;
@@ -398,10 +398,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- set_vt batch (seconds): (TEXT, BIGINT[], INTEGER) -> SETOF queue.message_record
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_ids BIGINT[], vt INTEGER)
+-- change_visibility batch (seconds): (TEXT, BIGINT[], INTEGER) -> SETOF queue.message_record
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_ids BIGINT[], vt INTEGER)
 RETURNS SETOF queue.message_record LANGUAGE sql AS $$
-    SELECT * FROM queue.set_vt(queue_name, msg_ids, clock_timestamp() + make_interval(secs => vt));
+    SELECT * FROM queue.change_visibility(queue_name, msg_ids, clock_timestamp() + make_interval(secs => vt));
 $$;
 
 -- send_fifo (7-arg with sync_commit): sync_commit ignored in PL/pgSQL stub.

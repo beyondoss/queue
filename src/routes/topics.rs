@@ -1,12 +1,12 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 
+use crate::AppState;
 use crate::error::ApiError;
 use crate::ops::topic;
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct TopicSendRequest {
@@ -21,9 +21,14 @@ pub async fn send_topic(
     Path(routing_key): Path<String>,
     Json(body): Json<TopicSendRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let result =
-        topic::send_topic(&state.pool, &routing_key, body.message, body.headers, body.delay)
-            .await?;
+    let result = topic::send_topic(
+        &state.pool,
+        &routing_key,
+        body.message,
+        body.headers,
+        body.delay,
+    )
+    .await?;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "queues_matched": result.queues_matched })),

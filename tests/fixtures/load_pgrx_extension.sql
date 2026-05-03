@@ -37,9 +37,9 @@ AS '$libdir/libbeyond_queue_extension', 'send_batch_internal_wrapper';
 -- Benchmarks: pgrx read is 6.7× slower single-threaded; PL/pgSQL version defined
 -- in hot_paths.sql already uses no ORDER BY and literal embedding.
 
--- read_with_poll — drop first (hot_paths.sql defines this as SETOF queue.message_record)
-DROP FUNCTION IF EXISTS queue.read_with_poll(TEXT, INTEGER, INTEGER, INTEGER, INTEGER, JSONB);
-CREATE FUNCTION queue.read_with_poll(
+-- receive — drop first (hot_paths.sql defines this as SETOF queue.message_record)
+DROP FUNCTION IF EXISTS queue.receive(TEXT, INTEGER, INTEGER, INTEGER, INTEGER, JSONB);
+CREATE FUNCTION queue.receive(
     queue_name       TEXT,
     vt               INTEGER,
     qty              INTEGER,
@@ -56,7 +56,7 @@ CREATE FUNCTION queue.read_with_poll(
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libbeyond_queue_extension', 'read_with_poll_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'receive_fn_wrapper';
 
 -- delete (single)
 CREATE OR REPLACE FUNCTION queue.delete(queue_name TEXT, msg_id BIGINT)
@@ -97,9 +97,9 @@ RETURNS TABLE (
 LANGUAGE C VOLATILE
 AS '$libdir/libbeyond_queue_extension', 'pop_wrapper';
 
--- set_vt (timestamp) — drop first (hot_paths.sql defines this as SETOF queue.message_record)
-DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT, TIMESTAMP WITH TIME ZONE);
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_id BIGINT, vt TIMESTAMP WITH TIME ZONE)
+-- change_visibility (timestamp) — drop first (hot_paths.sql defines this as SETOF queue.message_record)
+DROP FUNCTION IF EXISTS queue.change_visibility(TEXT, BIGINT, TIMESTAMP WITH TIME ZONE);
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_id BIGINT, vt TIMESTAMP WITH TIME ZONE)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -110,11 +110,11 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libbeyond_queue_extension', 'set_vt_ts_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'change_visibility_ts_wrapper';
 
--- set_vt (seconds) — drop first because schema.sql defines this as SETOF queue.message_record
-DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT, INTEGER);
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_id BIGINT, vt INTEGER)
+-- change_visibility (seconds) — drop first because schema.sql defines this as SETOF queue.message_record
+DROP FUNCTION IF EXISTS queue.change_visibility(TEXT, BIGINT, INTEGER);
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_id BIGINT, vt INTEGER)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -125,11 +125,11 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libbeyond_queue_extension', 'set_vt_secs_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'change_visibility_secs_wrapper';
 
--- set_vt batch (timestamp) — drop first (return type change)
-DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT[], TIMESTAMP WITH TIME ZONE);
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_ids BIGINT[], vt TIMESTAMP WITH TIME ZONE)
+-- change_visibility batch (timestamp) — drop first (return type change)
+DROP FUNCTION IF EXISTS queue.change_visibility(TEXT, BIGINT[], TIMESTAMP WITH TIME ZONE);
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_ids BIGINT[], vt TIMESTAMP WITH TIME ZONE)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -140,11 +140,11 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libbeyond_queue_extension', 'set_vt_batch_ts_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'change_visibility_batch_ts_wrapper';
 
--- set_vt batch (seconds) — drop first (return type change)
-DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT[], INTEGER);
-CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_ids BIGINT[], vt INTEGER)
+-- change_visibility batch (seconds) — drop first (return type change)
+DROP FUNCTION IF EXISTS queue.change_visibility(TEXT, BIGINT[], INTEGER);
+CREATE FUNCTION queue.change_visibility(queue_name TEXT, msg_ids BIGINT[], vt INTEGER)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -155,7 +155,7 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libbeyond_queue_extension', 'set_vt_batch_secs_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'change_visibility_batch_secs_wrapper';
 
 -- send_fifo (canonical) — drop both overloads (6-arg PL/pgSQL and 7-arg stub added in hot_paths.sql).
 DROP FUNCTION IF EXISTS queue.send_fifo(TEXT, JSONB, TEXT, TEXT, JSONB, TIMESTAMP WITH TIME ZONE);
@@ -172,9 +172,9 @@ CREATE FUNCTION queue.send_fifo(
 LANGUAGE C VOLATILE
 AS '$libdir/libbeyond_queue_extension', 'send_fifo_full_wrapper';
 
--- read_fifo_with_poll — drop PL/pgSQL version, replace with WaitLatch C version.
-DROP FUNCTION IF EXISTS queue.read_fifo_with_poll(TEXT, INTEGER, INTEGER, INTEGER, INTEGER);
-CREATE FUNCTION queue.read_fifo_with_poll(
+-- receive_fifo (5-arg) — drop PL/pgSQL version, replace with WaitLatch C version.
+DROP FUNCTION IF EXISTS queue.receive_fifo(TEXT, INTEGER, INTEGER, INTEGER, INTEGER);
+CREATE FUNCTION queue.receive_fifo(
     queue_name       TEXT,
     vt               INTEGER,
     qty              INTEGER,
@@ -190,4 +190,4 @@ CREATE FUNCTION queue.read_fifo_with_poll(
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libbeyond_queue_extension', 'read_fifo_with_poll_fn_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'receive_fifo_fn_wrapper';

@@ -117,19 +117,21 @@ unsafe fn direct_heap_insert(
     // Build values array for the 7 columns:
     //   msg_id(1) read_ct(2) enqueued_at(3) last_read_at(4) vt(5) message(6) headers(7)
     let now = GetCurrentTimestamp();
-    let vt_datum = delay.into_datum().unwrap_or_else(|| Datum::from(now as usize));
+    let vt_datum = delay
+        .into_datum()
+        .unwrap_or_else(|| Datum::from(now as usize));
     let msg_datum = msg.into_datum().unwrap();
     let hdr_datum = headers.and_then(|h| h.into_datum());
 
     let mut values: [Datum; 7] = [Datum::from(0usize); 7];
     let mut nulls: [bool; 7] = [false; 7];
 
-    values[0] = Datum::from(msg_id as usize);   // msg_id  (i64 → usize on 64-bit)
-    values[1] = Datum::from(0u32 as usize);      // read_ct = 0
-    values[2] = Datum::from(now as usize);        // enqueued_at = clock_timestamp()
-    nulls[3] = true;                              // last_read_at = NULL
-    values[4] = vt_datum;                         // vt (delay timestamp)
-    values[5] = msg_datum;                        // message JSONB
+    values[0] = Datum::from(msg_id as usize); // msg_id  (i64 → usize on 64-bit)
+    values[1] = Datum::from(0u32 as usize); // read_ct = 0
+    values[2] = Datum::from(now as usize); // enqueued_at = clock_timestamp()
+    nulls[3] = true; // last_read_at = NULL
+    values[4] = vt_datum; // vt (delay timestamp)
+    values[5] = msg_datum; // message JSONB
     match hdr_datum {
         Some(d) => values[6] = d,
         None => nulls[6] = true,
@@ -224,7 +226,11 @@ fn send_full(
         Spi::connect_mut(|client| {
             client.update("SET LOCAL synchronous_commit = off", None, &[])?;
             let id = client
-                .update(&insert_sql, None, &[delay.into(), msg.into(), headers.into()])?
+                .update(
+                    &insert_sql,
+                    None,
+                    &[delay.into(), msg.into(), headers.into()],
+                )?
                 .first()
                 .get::<i64>(1)?
                 .unwrap_or_else(|| pgrx::error!("queue.send: no msg_id returned"));
@@ -279,11 +285,7 @@ fn send_batch_internal(
             client.update("SET LOCAL synchronous_commit = off", None, &[])?;
         }
         let mut out = Vec::new();
-        for row in client.update(
-            &insert_sql,
-            None,
-            &[msgs_dow, delay.into(), hdrs_dow],
-        )? {
+        for row in client.update(&insert_sql, None, &[msgs_dow, delay.into(), hdrs_dow])? {
             if let Some(id) = row.get::<i64>(1)? {
                 out.push(id);
             }
@@ -299,10 +301,10 @@ fn send_batch_internal(
 }
 
 // ---------------------------------------------------------------------------
-// read_with_poll
+// receive
 // ---------------------------------------------------------------------------
 
-// read_with_poll: WaitLatch + shared-memory waiter registry for push-based wakeup.
+// receive: WaitLatch + shared-memory waiter registry for push-based wakeup.
 //
 // queue.read (the polling-free bulk read) is implemented in PL/pgSQL — not pgrx.
 // PL/pgSQL RETURN QUERY EXECUTE copies whole heap tuples once and streams them
@@ -324,8 +326,8 @@ fn send_batch_internal(
 //         Wakes when a sender's XactCallback fires SetLatch after commit, when
 //         the deadline elapses, or when the postmaster dies.
 //      f. ProcessInterrupts() — honour Ctrl+C / statement_timeout.
-#[pg_extern(name = "read_with_poll", schema = "queue", volatile)]
-fn read_with_poll(
+#[pg_extern(name = "receive", schema = "queue", volatile)]
+fn receive_fn(
     queue_name: &str,
     vt: i32,
     qty: i32,
@@ -398,7 +400,7 @@ fn read_with_poll(
 
         let rows = if is_empty_cond {
             Spi::connect_mut(|client| collect_msg_rows(client, &read_sql_simple, &[]))
-                .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.read_with_poll: {e}"))
+                .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.receive: {e}"))
         } else {
             Spi::connect_mut(|client| {
                 collect_msg_rows(
@@ -407,7 +409,7 @@ fn read_with_poll(
                     &[pgrx::JsonB(cond_val.clone()).into()],
                 )
             })
-            .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.read_with_poll: {e}"))
+            .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.receive: {e}"))
         };
 
         if !rows.is_empty() {
@@ -449,7 +451,7 @@ fn read_with_poll(
 // Canonical FIFO hot path: inserts with explicit message_group_id and
 // deduplication_id. Short overloads in schema.sql call this.
 //
-// Fires the same WaitLatch XactCallback as send_full so read_fifo_with_poll
+// Fires the same WaitLatch XactCallback as send_full so receive_fifo
 // wakes on commit rather than spinning on poll_interval_ms.
 #[pg_extern(name = "send_fifo", schema = "queue", volatile, parallel_safe)]
 fn send_fifo_full(
@@ -497,16 +499,16 @@ fn send_fifo_full(
 }
 
 // ---------------------------------------------------------------------------
-// read_fifo_with_poll
+// receive_fifo
 // ---------------------------------------------------------------------------
 
-// WaitLatch-based FIFO read.  Mirrors read_with_poll but uses the
+// WaitLatch-based FIFO read.  Mirrors receive but uses the
 // BOOL_AND eligible_group CTE for correct FIFO group serialization.
 //
 // qty and vt are embedded as format-string literals for the same reason as
-// read_with_poll: generic plans with LIMIT $N degrade SKIP LOCKED throughput.
-#[pg_extern(name = "read_fifo_with_poll", schema = "queue", volatile)]
-fn read_fifo_with_poll_fn(
+// receive: generic plans with LIMIT $N degrade SKIP LOCKED throughput.
+#[pg_extern(name = "receive_fifo", schema = "queue", volatile)]
+fn receive_fifo_fn(
     queue_name: &str,
     vt: i32,
     qty: i32,
@@ -562,7 +564,7 @@ fn read_fifo_with_poll_fn(
         unsafe { pgrx::pg_sys::ResetLatch(pgrx::pg_sys::MyLatch) };
 
         let rows = Spi::connect_mut(|client| collect_msg_rows(client, &read_sql, &[]))
-            .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.read_fifo_with_poll: {e}"));
+            .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.receive_fifo: {e}"));
 
         if !rows.is_empty() {
             break rows;
@@ -614,18 +616,14 @@ fn delete_single(queue_name: &str, msg_id: i64) -> bool {
 }
 
 #[pg_extern(name = "delete", schema = "queue", volatile, parallel_safe)]
-fn delete_batch(
-    queue_name: &str,
-    msg_ids: pgrx::Array<i64>,
-) -> SetOfIterator<'static, i64> {
+fn delete_batch(queue_name: &str, msg_ids: pgrx::Array<i64>) -> SetOfIterator<'static, i64> {
     validate_name(queue_name);
     let qtable = q(queue_name);
 
     // Collect before Spi::connect_mut — Array borrows PostgreSQL memory.
     let ids: Vec<Option<i64>> = msg_ids.iter().collect();
 
-    let sql =
-        format!("DELETE FROM {qtable} WHERE msg_id = ANY($1::bigint[]) RETURNING msg_id");
+    let sql = format!("DELETE FROM {qtable} WHERE msg_id = ANY($1::bigint[]) RETURNING msg_id");
 
     let deleted = Spi::connect_mut(|client| {
         let mut out = Vec::new();
@@ -673,10 +671,7 @@ fn archive_single(queue_name: &str, msg_id: i64) -> bool {
 }
 
 #[pg_extern(name = "archive", schema = "queue", volatile, parallel_safe)]
-fn archive_batch(
-    queue_name: &str,
-    msg_ids: pgrx::Array<i64>,
-) -> SetOfIterator<'static, i64> {
+fn archive_batch(queue_name: &str, msg_ids: pgrx::Array<i64>) -> SetOfIterator<'static, i64> {
     validate_name(queue_name);
     let qtable = q(queue_name);
     let atable = a(queue_name);
@@ -749,11 +744,11 @@ fn pop(
 }
 
 // ---------------------------------------------------------------------------
-// set_vt
+// change_visibility
 // ---------------------------------------------------------------------------
 
-#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
-fn set_vt_ts(
+#[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+fn change_visibility_ts(
     queue_name: &str,
     msg_id: i64,
     vt: TimestampWithTimeZone,
@@ -777,16 +772,15 @@ fn set_vt_ts(
          RETURNING msg_id, read_ct, enqueued_at, last_read_at, vt, message, headers"
     );
 
-    let rows = Spi::connect_mut(|client| {
-        collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()])
-    })
-    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
+    let rows =
+        Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()]))
+            .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
     TableIterator::new(rows.into_iter())
 }
 
-#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
-fn set_vt_secs(
+#[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+fn change_visibility_secs(
     queue_name: &str,
     msg_id: i64,
     vt: i32,
@@ -812,16 +806,15 @@ fn set_vt_secs(
          RETURNING msg_id, read_ct, enqueued_at, last_read_at, vt, message, headers"
     );
 
-    let rows = Spi::connect_mut(|client| {
-        collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()])
-    })
-    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
+    let rows =
+        Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()]))
+            .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
     TableIterator::new(rows.into_iter())
 }
 
-#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
-fn set_vt_batch_ts(
+#[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+fn change_visibility_batch_ts(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
     vt: TimestampWithTimeZone,
@@ -846,16 +839,14 @@ fn set_vt_batch_ts(
          RETURNING msg_id, read_ct, enqueued_at, last_read_at, vt, message, headers"
     );
 
-    let rows = Spi::connect_mut(|client| {
-        collect_msg_rows(client, &sql, &[vt.into(), ids.into()])
-    })
-    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
+    let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), ids.into()]))
+        .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
     TableIterator::new(rows.into_iter())
 }
 
-#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
-fn set_vt_batch_secs(
+#[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+fn change_visibility_batch_secs(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
     vt: i32,
@@ -882,10 +873,8 @@ fn set_vt_batch_secs(
          RETURNING msg_id, read_ct, enqueued_at, last_read_at, vt, message, headers"
     );
 
-    let rows = Spi::connect_mut(|client| {
-        collect_msg_rows(client, &sql, &[vt.into(), ids.into()])
-    })
-    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
+    let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), ids.into()]))
+        .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
     TableIterator::new(rows.into_iter())
 }

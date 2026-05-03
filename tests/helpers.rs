@@ -14,7 +14,12 @@ static TEST_ENV: OnceLock<TestEnv> = OnceLock::new();
 
 fn cleanup_orphaned_containers() {
     let Ok(out) = std::process::Command::new("docker")
-        .args(["ps", "-q", "--filter", "label=org.testcontainers.managed-by=testcontainers"])
+        .args([
+            "ps",
+            "-q",
+            "--filter",
+            "label=org.testcontainers.managed-by=testcontainers",
+        ])
         .output()
     else {
         return;
@@ -58,8 +63,7 @@ pub fn test_env() -> &'static TestEnv {
                     .await
                     .expect("connect to test postgres");
 
-                let schema_sql =
-                    include_str!("../beyond-queue-extension/sql/schema.sql");
+                let schema_sql = include_str!("../beyond-queue-extension/sql/schema.sql");
                 let hot_paths_sql = include_str!("fixtures/hot_paths.sql");
 
                 sqlx::raw_sql(schema_sql)
@@ -75,8 +79,11 @@ pub fn test_env() -> &'static TestEnv {
                     .await
                     .expect("test server");
 
-                tx.send(TestEnv { url: server.url, pool })
-                    .expect("send TestEnv");
+                tx.send(TestEnv {
+                    url: server.url,
+                    pool,
+                })
+                .expect("send TestEnv");
 
                 let _container = container;
                 tokio::signal::ctrl_c().await.ok();
@@ -113,8 +120,13 @@ impl TestClient {
     }
 
     pub async fn get(&self, path: &str) -> TestResponse {
-        TestResponse::from(self.req(reqwest::Method::GET, path).send().await.expect("GET"))
-            .await
+        TestResponse::from(
+            self.req(reqwest::Method::GET, path)
+                .send()
+                .await
+                .expect("GET"),
+        )
+        .await
     }
 
     pub async fn post<B: serde::Serialize>(&self, path: &str, body: &B) -> TestResponse {
@@ -189,8 +201,7 @@ impl TestResponse {
 
     #[track_caller]
     pub fn json<T: serde::de::DeserializeOwned>(self) -> T {
-        serde_json::from_str(&self.body).unwrap_or_else(|e| {
-            panic!("deserialize failed: {e}\nbody: {}", self.body)
-        })
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|e| panic!("deserialize failed: {e}\nbody: {}", self.body))
     }
 }

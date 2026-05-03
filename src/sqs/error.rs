@@ -37,13 +37,23 @@ impl SqsErrorCode {
     pub fn message(&self) -> &'static str {
         match self {
             Self::NonExistentQueue => "The specified queue does not exist.",
-            Self::InvalidMessageContents => "The message contains characters outside the allowed set.",
-            Self::ReceiptHandleIsInvalid => "The input receipt handle is not a valid receipt handle.",
-            Self::BatchEntryIdsNotDistinct => "Two or more batch entries in the request have the same Id.",
+            Self::InvalidMessageContents => {
+                "The message contains characters outside the allowed set."
+            }
+            Self::ReceiptHandleIsInvalid => {
+                "The input receipt handle is not a valid receipt handle."
+            }
+            Self::BatchEntryIdsNotDistinct => {
+                "Two or more batch entries in the request have the same Id."
+            }
             Self::TooManyEntriesInBatchRequest => "Maximum number of entries per request are 10.",
             Self::EmptyBatchRequest => "There is nothing to delete.",
-            Self::InvalidBatchEntryId => "A batch entry id can only contain alphanumeric characters, hyphens and underscores.",
-            Self::QueueAlreadyExists => "A queue already exists with the same name and a different value for attribute.",
+            Self::InvalidBatchEntryId => {
+                "A batch entry id can only contain alphanumeric characters, hyphens and underscores."
+            }
+            Self::QueueAlreadyExists => {
+                "A queue already exists with the same name and a different value for attribute."
+            }
             Self::InvalidAttributeName => "Unknown attribute: %s.",
             Self::InternalError => "We encountered an internal error. Please try again.",
         }
@@ -124,10 +134,5 @@ fn xml_error_response(status: StatusCode, code: &SqsErrorCode, request_id: &str)
         code.message(),
         request_id,
     );
-    (
-        status,
-        [("content-type", "text/xml")],
-        xml,
-    )
-        .into_response()
+    (status, [("content-type", "text/xml")], xml).into_response()
 }

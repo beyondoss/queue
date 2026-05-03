@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use axum::extract::State;
 use axum::response::IntoResponse;
 
+use crate::AppState;
 use crate::ops::receive;
 use crate::sqs::context::SqsContext;
 use crate::sqs::error::SqsError;
 use crate::sqs::receipt;
 use crate::sqs::types::{ReceiveMessageRequest, ReceiveMessageResponse, SqsMessage};
 use crate::sqs::util::{md5_of, queue_name_from_url};
-use crate::AppState;
 
 pub async fn handle(
     State(state): State<AppState>,
@@ -57,7 +57,10 @@ pub async fn handle(
             let receipt_handle = receipt::encode(&queue_name, m.msg_id);
 
             let mut attributes = HashMap::new();
-            attributes.insert("ApproximateReceiveCount".to_string(), m.read_count.to_string());
+            attributes.insert(
+                "ApproximateReceiveCount".to_string(),
+                m.read_count.to_string(),
+            );
             attributes.insert(
                 "SentTimestamp".to_string(),
                 m.enqueued_at.timestamp_millis().to_string(),

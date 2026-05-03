@@ -1,7 +1,7 @@
 -- beyond-queue schema
 -- Tables, types, indexes, and non-hot-path functions.
--- Hot path functions (send, send_batch, read, read_with_poll, delete, archive,
--- pop, set_vt) are implemented in Rust via pgrx and override these declarations.
+-- Hot path functions (send, send_batch, receive, receive_fifo, delete, archive,
+-- pop, change_visibility) are implemented in Rust via pgrx and override these declarations.
 
 CREATE SCHEMA IF NOT EXISTS queue;
 
@@ -526,7 +526,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE FUNCTION queue.drop_queue(queue_name TEXT)
+CREATE FUNCTION queue.delete_queue(queue_name TEXT)
 RETURNS BOOLEAN AS $$
 DECLARE
     qtable      TEXT := queue.format_table_name(queue_name, 'q');
@@ -679,11 +679,18 @@ $$ LANGUAGE plpgsql;
 -- FIFO grouped reads (not hot-pathed into pgrx in v1)
 ------------------------------------------------------------
 
-CREATE FUNCTION queue.read_grouped_rr(queue_name TEXT, vt INTEGER, qty INTEGER)
+CREATE FUNCTION queue.receive_grouped_rr(
+    queue_name       TEXT,
+    vt               INTEGER,
+    qty              INTEGER,
+    wait_secs        INTEGER DEFAULT 0,
+    poll_interval_ms INTEGER DEFAULT 100
+)
 RETURNS SETOF queue.message_record AS $$
 DECLARE
-    sql    TEXT;
-    qtable TEXT := queue.format_table_name(queue_name, 'q');
+    sql     TEXT;
+    qtable  TEXT := queue.format_table_name(queue_name, 'q');
+    stop_at TIMESTAMP;
 BEGIN
     sql := FORMAT(
         $QUERY$
@@ -733,39 +740,33 @@ BEGIN
         $QUERY$,
         qtable, qtable, qtable, qtable, qtable, make_interval(secs => vt)
     );
-    RETURN QUERY EXECUTE sql USING qty;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE FUNCTION queue.read_grouped_rr_with_poll(
-    queue_name      TEXT,
-    vt              INTEGER,
-    qty             INTEGER,
-    max_poll_seconds INTEGER DEFAULT 5,
-    poll_interval_ms INTEGER DEFAULT 100
-)
-RETURNS SETOF queue.message_record AS $$
-DECLARE
-    r       queue.message_record;
-    stop_at TIMESTAMP;
-BEGIN
-    stop_at := clock_timestamp() + make_interval(secs => max_poll_seconds);
+    stop_at := clock_timestamp() + make_interval(secs => wait_secs);
     LOOP
-        IF (SELECT clock_timestamp() >= stop_at) THEN RETURN; END IF;
-        FOR r IN SELECT * FROM queue.read_grouped_rr(queue_name, vt, qty) LOOP
-            RETURN NEXT r;
-        END LOOP;
-        IF FOUND THEN RETURN;
-        ELSE PERFORM pg_sleep(poll_interval_ms::numeric / 1000); END IF;
+        RETURN QUERY EXECUTE sql USING qty;
+        IF FOUND THEN RETURN; END IF;
+        IF clock_timestamp() >= stop_at THEN RETURN; END IF;
+        PERFORM pg_sleep(
+            LEAST(
+                poll_interval_ms::numeric / 1000,
+                EXTRACT(EPOCH FROM (stop_at - clock_timestamp()))
+            )
+        );
     END LOOP;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE FUNCTION queue.read_grouped_head(queue_name TEXT, vt INTEGER, qty INTEGER)
+CREATE FUNCTION queue.receive_grouped_head(
+    queue_name       TEXT,
+    vt               INTEGER,
+    qty              INTEGER,
+    wait_secs        INTEGER DEFAULT 0,
+    poll_interval_ms INTEGER DEFAULT 100
+)
 RETURNS SETOF queue.message_record AS $$
 DECLARE
-    sql    TEXT;
-    qtable TEXT := queue.format_table_name(queue_name, 'q');
+    sql     TEXT;
+    qtable  TEXT := queue.format_table_name(queue_name, 'q');
+    stop_at TIMESTAMP;
 BEGIN
     sql := FORMAT(
         $QUERY$
@@ -792,15 +793,33 @@ BEGIN
         $QUERY$,
         qtable, make_interval(secs => vt)
     );
-    RETURN QUERY EXECUTE sql USING qty;
+    stop_at := clock_timestamp() + make_interval(secs => wait_secs);
+    LOOP
+        RETURN QUERY EXECUTE sql USING qty;
+        IF FOUND THEN RETURN; END IF;
+        IF clock_timestamp() >= stop_at THEN RETURN; END IF;
+        PERFORM pg_sleep(
+            LEAST(
+                poll_interval_ms::numeric / 1000,
+                EXTRACT(EPOCH FROM (stop_at - clock_timestamp()))
+            )
+        );
+    END LOOP;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE FUNCTION queue.read_grouped(queue_name TEXT, vt INTEGER, qty INTEGER)
+CREATE FUNCTION queue.receive_grouped(
+    queue_name       TEXT,
+    vt               INTEGER,
+    qty              INTEGER,
+    wait_secs        INTEGER DEFAULT 0,
+    poll_interval_ms INTEGER DEFAULT 100
+)
 RETURNS SETOF queue.message_record AS $$
 DECLARE
-    sql    TEXT;
-    qtable TEXT := queue.format_table_name(queue_name, 'q');
+    sql     TEXT;
+    qtable  TEXT := queue.format_table_name(queue_name, 'q');
+    stop_at TIMESTAMP;
 BEGIN
     sql := FORMAT(
         $QUERY$
@@ -859,30 +878,17 @@ BEGIN
         $QUERY$,
         qtable, qtable, qtable, qtable, qtable, make_interval(secs => vt)
     );
-    RETURN QUERY EXECUTE sql USING qty;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE FUNCTION queue.read_grouped_with_poll(
-    queue_name       TEXT,
-    vt               INTEGER,
-    qty              INTEGER,
-    max_poll_seconds INTEGER DEFAULT 5,
-    poll_interval_ms INTEGER DEFAULT 100
-)
-RETURNS SETOF queue.message_record AS $$
-DECLARE
-    r       queue.message_record;
-    stop_at TIMESTAMP;
-BEGIN
-    stop_at := clock_timestamp() + make_interval(secs => max_poll_seconds);
+    stop_at := clock_timestamp() + make_interval(secs => wait_secs);
     LOOP
-        IF (SELECT clock_timestamp() >= stop_at) THEN RETURN; END IF;
-        FOR r IN SELECT * FROM queue.read_grouped(queue_name, vt, qty) LOOP
-            RETURN NEXT r;
-        END LOOP;
-        IF FOUND THEN RETURN;
-        ELSE PERFORM pg_sleep(poll_interval_ms::numeric / 1000); END IF;
+        RETURN QUERY EXECUTE sql USING qty;
+        IF FOUND THEN RETURN; END IF;
+        IF clock_timestamp() >= stop_at THEN RETURN; END IF;
+        PERFORM pg_sleep(
+            LEAST(
+                poll_interval_ms::numeric / 1000,
+                EXTRACT(EPOCH FROM (stop_at - clock_timestamp()))
+            )
+        );
     END LOOP;
 END;
 $$ LANGUAGE plpgsql;
@@ -893,7 +899,7 @@ $$ LANGUAGE plpgsql;
 
 -- PL/pgSQL fallback — overridden by pgrx C hot path (send_fifo_full_wrapper) when
 -- load_pgrx_extension.sql is applied. The C version fires a WaitLatch XactCallback
--- after commit so read_fifo_with_poll readers wake immediately; this fallback uses
+-- after commit so receive_fifo readers wake immediately; this fallback uses
 -- pg_notify (LISTEN consumers only) and does not wake WaitLatch-based readers.
 CREATE FUNCTION queue.send_fifo(
     queue_name       TEXT,
@@ -954,7 +960,7 @@ $$;
 -- qty and vt are embedded as literals (not params) to avoid generic plans that
 -- degrade SKIP LOCKED throughput. ORDER BY msg_id ASC is intentional here — FIFO
 -- ordering within a group is the whole point.
-CREATE OR REPLACE FUNCTION queue.read_fifo(
+CREATE OR REPLACE FUNCTION queue.receive_fifo(
     queue_name  TEXT,
     vt          INTEGER,
     qty         INTEGER
@@ -996,10 +1002,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- PL/pgSQL fallback — overridden by pgrx C hot path (read_fifo_with_poll_fn_wrapper)
+-- PL/pgSQL fallback — overridden by pgrx C hot path (receive_fifo_fn_wrapper)
 -- when load_pgrx_extension.sql is applied. The C version uses WaitLatch + shared-memory
 -- waiter registry for push-based wakeup; this fallback polls with pg_sleep.
-CREATE OR REPLACE FUNCTION queue.read_fifo_with_poll(
+-- SQL is inlined (not delegated to the 3-arg overload) to avoid PostgreSQL's
+-- "function is not unique" error when both overloads are candidates for 3 args.
+CREATE OR REPLACE FUNCTION queue.receive_fifo(
     queue_name       TEXT,
     vt               INTEGER,
     qty              INTEGER,
@@ -1009,12 +1017,40 @@ CREATE OR REPLACE FUNCTION queue.read_fifo_with_poll(
 DECLARE
     r       queue.message_record;
     stop_at TIMESTAMP;
+    qtable  TEXT := queue.format_table_name(queue_name, 'q');
+    sql     TEXT;
 BEGIN
     stop_at := clock_timestamp() + make_interval(secs => max_poll_seconds);
+    sql := format(
+        $Q$
+        WITH eligible_group AS MATERIALIZED (
+            SELECT message_group_id
+            FROM queue.%1$I
+            GROUP BY message_group_id
+            HAVING BOOL_AND(vt <= clock_timestamp())
+            ORDER BY MIN(msg_id) ASC
+            LIMIT 1
+        ),
+        cte AS (
+            SELECT m.msg_id
+            FROM queue.%1$I m
+            WHERE m.message_group_id = (SELECT message_group_id FROM eligible_group)
+              AND m.vt <= clock_timestamp()
+            ORDER BY m.msg_id ASC
+            LIMIT %2$s
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE queue.%1$I m
+        SET last_read_at = clock_timestamp(),
+            vt           = clock_timestamp() + make_interval(secs => %3$s),
+            read_ct      = read_ct + 1
+        FROM cte WHERE m.msg_id = cte.msg_id
+        RETURNING m.msg_id, m.read_ct, m.enqueued_at, m.last_read_at, m.vt, m.message, m.headers
+        $Q$,
+        qtable, qty, vt
+    );
     LOOP
-        FOR r IN SELECT * FROM queue.read_fifo(queue_name, vt, qty) LOOP
-            RETURN NEXT r;
-        END LOOP;
+        FOR r IN EXECUTE sql LOOP RETURN NEXT r; END LOOP;
         IF FOUND THEN RETURN; END IF;
         IF clock_timestamp() >= stop_at THEN RETURN; END IF;
         PERFORM pg_sleep(

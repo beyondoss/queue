@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::response::IntoResponse;
 
+use crate::AppState;
 use crate::ops::send;
 use crate::sqs::context::SqsContext;
 use crate::sqs::error::{SqsError, SqsErrorCode};
@@ -8,7 +9,6 @@ use crate::sqs::types::{
     SendMessageBatchRequest, SendMessageBatchResponse, SendMessageBatchResultEntry,
 };
 use crate::sqs::util::{md5_of, message_attributes_to_headers, queue_name_from_url};
-use crate::AppState;
 
 pub async fn handle(
     State(state): State<AppState>,
@@ -77,10 +77,17 @@ pub async fn handle(
                 .unwrap_or(serde_json::Value::Null)
             })
             .collect();
-        send::send_batch(&state.pool, &queue_name, messages, Some(headers), delay, true)
-            .await
-            .map_err(|e| ctx.internal_error(e))?
-            .msg_ids
+        send::send_batch(
+            &state.pool,
+            &queue_name,
+            messages,
+            Some(headers),
+            delay,
+            true,
+        )
+        .await
+        .map_err(|e| ctx.internal_error(e))?
+        .msg_ids
     };
 
     let successful: Vec<SendMessageBatchResultEntry> = req

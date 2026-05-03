@@ -19,7 +19,7 @@ pub async fn receive_messages_fifo(
             vt              AS "visible_at!: DateTime<Utc>",
             message         AS "message!: serde_json::Value",
             headers         AS "headers?: serde_json::Value"
-        FROM queue.read_fifo_with_poll($1, $2, $3, $4, 100)
+        FROM queue.receive_fifo($1, $2, $3, $4, 100)
         "#,
         queue_name,
         vt_secs,
@@ -67,7 +67,7 @@ pub async fn receive_messages(
             vt              AS "visible_at!: DateTime<Utc>",
             message         AS "message!: serde_json::Value",
             headers         AS "headers?: serde_json::Value"
-        FROM queue.read_with_poll($1, $2, $3, $4, 100)
+        FROM queue.receive($1, $2, $3, $4, 100)
         "#,
         queue_name,
         vt_secs,

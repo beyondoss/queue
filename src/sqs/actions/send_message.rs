@@ -1,12 +1,12 @@
 use axum::extract::State;
 use axum::response::IntoResponse;
 
+use crate::AppState;
 use crate::ops::send;
 use crate::sqs::context::SqsContext;
 use crate::sqs::error::{SqsError, SqsErrorCode};
 use crate::sqs::types::{SendMessageRequest, SendMessageResponse};
 use crate::sqs::util::{md5_of, message_attributes_to_headers, queue_name_from_url};
-use crate::AppState;
 
 pub async fn handle(
     State(state): State<AppState>,
@@ -46,9 +46,16 @@ pub async fn handle(
         .await
         .map_err(|e| ctx.internal_error(e))?
     } else {
-        send::send_message(&state.pool, &queue_name, body_json, headers, req.delay_seconds, true)
-            .await
-            .map_err(|e| ctx.internal_error(e))?
+        send::send_message(
+            &state.pool,
+            &queue_name,
+            body_json,
+            headers,
+            req.delay_seconds,
+            true,
+        )
+        .await
+        .map_err(|e| ctx.internal_error(e))?
     };
 
     Ok(ctx.ok(SendMessageResponse {

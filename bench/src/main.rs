@@ -13,6 +13,18 @@ fn sc() -> &'static str {
     SCHEMA.get().map(|s| s.as_str()).unwrap_or("queue")
 }
 
+/// Full immediate-receive SQL fragment for the active schema.
+/// Uses '{}'::jsonb as the 4th arg for queue schema to select the 4-arg PL/pgSQL
+/// no-wait overload (TEXT,INT,INT,JSONB) rather than the 6-arg C WaitLatch overload
+/// (TEXT,INT,INT,INT,INT,JSONB) whose INT 4th param would match an integer literal.
+fn rx_sql() -> String {
+    if sc() == "queue" {
+        "SELECT msg_id FROM queue.receive($1, 30, $2, '{}'::jsonb)".into()
+    } else {
+        format!("SELECT msg_id FROM {}.read($1, 30, $2)", sc())
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "bench")]
 struct Args {
@@ -79,7 +91,7 @@ enum Command {
         /// Write results to this JSON file for later comparison.
         #[arg(long)]
         output: Option<String>,
-        /// Also run FIFO scenarios (read_fifo / send_fifo).
+        /// Also run FIFO scenarios (receive_fifo / send_fifo).
         #[arg(long)]
         fifo: bool,
         /// Also run OSS grouped scenarios against this URL (read_grouped_rr).
@@ -88,10 +100,7 @@ enum Command {
         oss_url: Option<String>,
     },
     /// Print a diff table comparing two run-all JSON output files.
-    Compare {
-        before: String,
-        after: String,
-    },
+    Compare { before: String, after: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -122,7 +131,11 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Compare needs no DB connection.
-    if let Command::Compare { ref before, ref after } = args.command {
+    if let Command::Compare {
+        ref before,
+        ref after,
+    } = args.command
+    {
         return compare(before, after);
     }
 
@@ -137,19 +150,45 @@ async fn main() -> Result<()> {
     );
 
     match args.command {
-        Command::Send { queue, count, concurrency, batch_size } => {
-            let r = run_send(&pool, &queue, count, concurrency, batch_size, args.async_commit).await?;
+        Command::Send {
+            queue,
+            count,
+            concurrency,
+            batch_size,
+        } => {
+            let r = run_send(
+                &pool,
+                &queue,
+                count,
+                concurrency,
+                batch_size,
+                args.async_commit,
+            )
+            .await?;
             print_results(&[r]);
         }
-        Command::Receive { queue, count, concurrency } => {
+        Command::Receive {
+            queue,
+            count,
+            concurrency,
+        } => {
             let r = run_receive(&pool, &queue, count, concurrency, args.async_commit).await?;
             print_results(&[r]);
         }
-        Command::RoundTrip { queue, count, concurrency } => {
+        Command::RoundTrip {
+            queue,
+            count,
+            concurrency,
+        } => {
             let r = run_round_trip(&pool, &queue, count, concurrency, args.async_commit).await?;
             print_results(&[r]);
         }
-        Command::RunAll { profile, output, fifo, oss_url } => {
+        Command::RunAll {
+            profile,
+            output,
+            fifo,
+            oss_url,
+        } => {
             let oss_pool = if let Some(ref u) = oss_url {
                 let p = build_pool(u, 36, args.async_commit)
                     .await
@@ -158,7 +197,8 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
-            let results = run_all(&pool, oss_pool.as_ref(), profile, fifo, args.async_commit).await?;
+            let results =
+                run_all(&pool, oss_pool.as_ref(), profile, fifo, args.async_commit).await?;
             print_results(&results);
             if let Some(path) = output {
                 std::fs::write(&path, serde_json::to_string_pretty(&results)?)?;
@@ -211,29 +251,43 @@ async fn build_pool(url: &str, max: u32, async_commit: bool) -> Result<PgPool> {
 // ---------------------------------------------------------------------------
 
 async fn ensure_queue(pool: &PgPool, queue: &str) -> Result<()> {
-    sqlx::query(&format!("SELECT {}.create($1)", sc())).bind(queue).execute(pool).await?;
+    sqlx::query(&format!("SELECT {}.create($1)", sc()))
+        .bind(queue)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
 async fn ensure_fifo_queue(pool: &PgPool, queue: &str) -> Result<()> {
-    sqlx::query(&format!("SELECT {}.create_fifo($1)", sc())).bind(queue).execute(pool).await?;
+    sqlx::query(&format!("SELECT {}.create_fifo($1)", sc()))
+        .bind(queue)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
 async fn purge_queue(pool: &PgPool, queue: &str) -> Result<()> {
-    sqlx::query(&format!("SELECT {}.purge_queue($1)", sc())).bind(queue).execute(pool).await?;
+    sqlx::query(&format!("SELECT {}.purge_queue($1)", sc()))
+        .bind(queue)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
 async fn warmup(pool: &PgPool, queue: &str, n: u32) -> Result<()> {
     for _ in 0..n {
-        let (msg_id,): (i64,) = sqlx::query_as(
-            &format!(r#"SELECT {}.send($1, '{{"w":1}}'::jsonb, NULL::jsonb, clock_timestamp())"#, sc()),
-        )
+        let (msg_id,): (i64,) = sqlx::query_as(&format!(
+            r#"SELECT {}.send($1, '{{"w":1}}'::jsonb, NULL::jsonb, clock_timestamp())"#,
+            sc()
+        ))
         .bind(queue)
         .fetch_one(pool)
         .await?;
-        sqlx::query(&format!("SELECT {}.delete($1, $2)", sc())).bind(queue).bind(msg_id).execute(pool).await?;
+        sqlx::query(&format!("SELECT {}.delete($1, $2)", sc()))
+            .bind(queue)
+            .bind(msg_id)
+            .execute(pool)
+            .await?;
     }
     Ok(())
 }
@@ -247,9 +301,10 @@ async fn fill_queue(pool: &PgPool, queue: &str, count: u64) -> Result<()> {
     let rem = count as usize % BATCH;
 
     for _ in 0..full {
-        sqlx::query(
-            &format!("SELECT {}._send_batch($1, $2::jsonb[], NULL::jsonb[], clock_timestamp())", sc()),
-        )
+        sqlx::query(&format!(
+            "SELECT {}._send_batch($1, $2::jsonb[], NULL::jsonb[], clock_timestamp())",
+            sc()
+        ))
         .bind(queue)
         .bind(&msgs)
         .execute(pool)
@@ -257,9 +312,10 @@ async fn fill_queue(pool: &PgPool, queue: &str, count: u64) -> Result<()> {
     }
     if rem > 0 {
         let tail: Vec<serde_json::Value> = (0..rem).map(|i| serde_json::json!({"b": i})).collect();
-        sqlx::query(
-            &format!("SELECT {}._send_batch($1, $2::jsonb[], NULL::jsonb[], clock_timestamp())", sc()),
-        )
+        sqlx::query(&format!(
+            "SELECT {}._send_batch($1, $2::jsonb[], NULL::jsonb[], clock_timestamp())",
+            sc()
+        ))
         .bind(queue)
         .bind(&tail)
         .execute(pool)
@@ -276,9 +332,10 @@ async fn fill_fifo_queue(pool: &PgPool, queue: &str, count: u64, groups: usize) 
         let n = ((count - inserted) as usize).min(BATCH);
         for i in 0..n {
             let gid = format!("g{}", (inserted as usize + i) % groups);
-            sqlx::query(
-                &format!(r#"SELECT {}.send_fifo($1, '{{"b":1}}'::jsonb, $2)"#, sc()),
-            )
+            sqlx::query(&format!(
+                r#"SELECT {}.send_fifo($1, '{{"b":1}}'::jsonb, $2)"#,
+                sc()
+            ))
             .bind(queue)
             .bind(&gid)
             .execute(pool)
@@ -298,9 +355,10 @@ async fn fill_grouped_queue(pool: &PgPool, queue: &str, count: u64, groups: usiz
         for i in 0..n {
             let gid = format!("g{}", (inserted as usize + i) % groups);
             let headers = serde_json::json!({"x-pgmq-group": gid});
-            sqlx::query(
-                &format!(r#"SELECT {}.send($1, '{{"b":1}}'::jsonb, $2::jsonb, clock_timestamp())"#, sc()),
-            )
+            sqlx::query(&format!(
+                r#"SELECT {}.send($1, '{{"b":1}}'::jsonb, $2::jsonb, clock_timestamp())"#,
+                sc()
+            ))
             .bind(queue)
             .bind(&headers)
             .execute(pool)
@@ -342,18 +400,21 @@ async fn run_send(
             for _ in 0..ops_per_worker {
                 let t = Instant::now();
                 if batch_size == 1 {
-                    sqlx::query(
-                        &format!(r#"SELECT {}.send($1, '{{"b":1}}'::jsonb, NULL::jsonb, clock_timestamp())"#, sc()),
-                    )
+                    sqlx::query(&format!(
+                        r#"SELECT {}.send($1, '{{"b":1}}'::jsonb, NULL::jsonb, clock_timestamp())"#,
+                        sc()
+                    ))
                     .bind(&queue)
                     .execute(pool.as_ref())
                     .await?;
                 } else {
-                    let msgs: Vec<serde_json::Value> =
-                        (0..batch_size).map(|i| serde_json::json!({"b": i})).collect();
-                    sqlx::query(
-                        &format!("SELECT {}._send_batch($1, $2::jsonb[], NULL::jsonb[], clock_timestamp())", sc()),
-                    )
+                    let msgs: Vec<serde_json::Value> = (0..batch_size)
+                        .map(|i| serde_json::json!({"b": i}))
+                        .collect();
+                    sqlx::query(&format!(
+                        "SELECT {}._send_batch($1, $2::jsonb[], NULL::jsonb[], clock_timestamp())",
+                        sc()
+                    ))
                     .bind(&queue)
                     .bind(&msgs)
                     .execute(pool.as_ref())
@@ -420,11 +481,14 @@ async fn run_send_fifo(
             for i in 0..per_worker {
                 let gid = format!("g{}", (w * per_worker + i) % groups);
                 let t = Instant::now();
-                sqlx::query(&format!(r#"SELECT {}.send_fifo($1, '{{"b":1}}'::jsonb, $2)"#, sc()))
-                    .bind(&queue)
-                    .bind(&gid)
-                    .execute(pool.as_ref())
-                    .await?;
+                sqlx::query(&format!(
+                    r#"SELECT {}.send_fifo($1, '{{"b":1}}'::jsonb, $2)"#,
+                    sc()
+                ))
+                .bind(&queue)
+                .bind(&gid)
+                .execute(pool.as_ref())
+                .await?;
                 samples.push(t.elapsed().as_micros() as u64);
             }
             Ok(samples)
@@ -479,12 +543,11 @@ async fn run_receive(
             while received < per_worker {
                 let want = (per_worker - received).min(10) as i32;
                 let t = Instant::now();
-                let rows: Vec<(i64,)> =
-                    sqlx::query_as(&format!("SELECT msg_id FROM {}.read($1, 30, $2)", sc()))
-                        .bind(&queue)
-                        .bind(want)
-                        .fetch_all(pool.as_ref())
-                        .await?;
+                let rows: Vec<(i64,)> = sqlx::query_as(&format!("{}", rx_sql()))
+                    .bind(&queue)
+                    .bind(want)
+                    .fetch_all(pool.as_ref())
+                    .await?;
                 if rows.is_empty() {
                     break;
                 }
@@ -557,12 +620,11 @@ async fn run_receive_sharded(
             while received < per_shard {
                 let want = (per_shard - received).min(10) as i32;
                 let t = Instant::now();
-                let rows: Vec<(i64,)> =
-                    sqlx::query_as(&format!("SELECT msg_id FROM {}.read($1, 30, $2)", sc()))
-                        .bind(&queue)
-                        .bind(want)
-                        .fetch_all(pool.as_ref())
-                        .await?;
+                let rows: Vec<(i64,)> = sqlx::query_as(&format!("{}", rx_sql()))
+                    .bind(&queue)
+                    .bind(want)
+                    .fetch_all(pool.as_ref())
+                    .await?;
                 if rows.is_empty() {
                     break;
                 }
@@ -635,12 +697,14 @@ async fn run_receive_fifo(
             while received < per_worker {
                 let want = (per_worker - received).min(10) as i32;
                 let t = Instant::now();
-                let rows: Vec<(i64,)> =
-                    sqlx::query_as(&format!("SELECT msg_id FROM {}.read_fifo($1, 30, $2)", sc()))
-                        .bind(&queue)
-                        .bind(want)
-                        .fetch_all(pool.as_ref())
-                        .await?;
+                let rows: Vec<(i64,)> = sqlx::query_as(&format!(
+                    "SELECT msg_id FROM {}.receive_fifo($1, 30, $2)",
+                    sc()
+                ))
+                .bind(&queue)
+                .bind(want)
+                .fetch_all(pool.as_ref())
+                .await?;
                 if rows.is_empty() {
                     break;
                 }
@@ -717,12 +781,14 @@ async fn run_receive_grouped_rr(
             while received < per_worker {
                 let want = (per_worker - received).min(10) as i32;
                 let t = Instant::now();
-                let rows: Vec<(i64,)> =
-                    sqlx::query_as(&format!("SELECT msg_id FROM {}.read_grouped_rr($1, 30, $2)", sc()))
-                        .bind(&queue)
-                        .bind(want)
-                        .fetch_all(pool.as_ref())
-                        .await?;
+                let rows: Vec<(i64,)> = sqlx::query_as(&format!(
+                    "SELECT msg_id FROM {}.read_grouped_rr($1, 30, $2)",
+                    sc()
+                ))
+                .bind(&queue)
+                .bind(want)
+                .fetch_all(pool.as_ref())
+                .await?;
                 if rows.is_empty() {
                     break;
                 }
@@ -792,9 +858,10 @@ async fn run_round_trip(
             let mut samples = Vec::with_capacity(per_worker as usize);
             for _ in 0..per_worker {
                 let t = Instant::now();
-                let (msg_id,): (i64,) = sqlx::query_as(
-                    &format!(r#"SELECT {}.send($1, '{{"b":1}}'::jsonb, NULL::jsonb, clock_timestamp())"#, sc()),
-                )
+                let (msg_id,): (i64,) = sqlx::query_as(&format!(
+                    r#"SELECT {}.send($1, '{{"b":1}}'::jsonb, NULL::jsonb, clock_timestamp())"#,
+                    sc()
+                ))
                 .bind(&queue)
                 .fetch_one(pool.as_ref())
                 .await?;
@@ -992,10 +1059,8 @@ fn print_results(results: &[BenchResult]) {
 }
 
 fn compare(before_path: &str, after_path: &str) -> Result<()> {
-    let before: Vec<BenchResult> =
-        serde_json::from_str(&std::fs::read_to_string(before_path)?)?;
-    let after: Vec<BenchResult> =
-        serde_json::from_str(&std::fs::read_to_string(after_path)?)?;
+    let before: Vec<BenchResult> = serde_json::from_str(&std::fs::read_to_string(before_path)?)?;
+    let after: Vec<BenchResult> = serde_json::from_str(&std::fs::read_to_string(after_path)?)?;
 
     println!(
         "\n{:<34} {:>12} {:>12} {:>10}   {:>10} {:>10} {:>10}",

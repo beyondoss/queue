@@ -4,17 +4,17 @@ mod queue;
 mod waiter;
 
 /// Called once when the extension is loaded.  Installs the shared-memory hooks
-/// that back read_with_poll's push-based wakeup (WaiterRegistry).
+/// that back receive/receive_fifo's push-based wakeup (WaiterRegistry).
 ///
 /// The extension must be listed in shared_preload_libraries for shared memory to
-/// be available.  Without it, read_with_poll falls back to timeout-only polling.
+/// be available.  Without it, receive falls back to timeout-only polling.
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     unsafe { waiter::install_hooks() }
 }
 
 // Bootstrap SQL: creates schema, tables, types, indexes, and non-hot-path functions.
-// Hot path functions (send, read, delete, archive, pop, set_vt) are provided by the
+// Hot path functions (send, receive, receive_fifo, delete, archive, pop, change_visibility) are provided by the
 // #[pg_extern] implementations in queue.rs and override any SQL versions via
 // CREATE OR REPLACE semantics.
 pgrx::extension_sql_file!("../sql/schema.sql", name = "queue_schema");
@@ -49,19 +49,15 @@ mod tests {
     }
 
     fn queue_depth(queue: &str) -> i64 {
-        Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM queue.q_{queue}"
-        ))
-        .expect("queue_depth query failed")
-        .expect("count was NULL")
+        Spi::get_one::<i64>(&format!("SELECT COUNT(*) FROM queue.q_{queue}"))
+            .expect("queue_depth query failed")
+            .expect("count was NULL")
     }
 
     fn archive_depth(queue: &str) -> i64 {
-        Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM queue.a_{queue}"
-        ))
-        .expect("archive_depth query failed")
-        .expect("count was NULL")
+        Spi::get_one::<i64>(&format!("SELECT COUNT(*) FROM queue.a_{queue}"))
+            .expect("archive_depth query failed")
+            .expect("count was NULL")
     }
 
     // -------------------------------------------------------------------------
@@ -76,11 +72,10 @@ mod tests {
         assert!(msg_id > 0, "msg_id should be positive");
 
         // read with vt=0 (message immediately re-visible)
-        let read_id: i64 = Spi::get_one::<i64>(
-            "SELECT msg_id FROM queue.read('slc_queue', 0, 1)",
-        )
-        .expect("read failed")
-        .expect("expected a message");
+        let read_id: i64 =
+            Spi::get_one::<i64>("SELECT msg_id FROM queue.receive('slc_queue', 0, 1)")
+                .expect("receive failed")
+                .expect("expected a message");
         assert_eq!(read_id, msg_id);
 
         // read_ct should now be 1
@@ -92,11 +87,10 @@ mod tests {
         assert_eq!(read_ct, 1);
 
         // delete it
-        let deleted: bool = Spi::get_one::<bool>(&format!(
-            "SELECT queue.delete('slc_queue', {msg_id})"
-        ))
-        .expect("delete failed")
-        .expect("delete returned NULL");
+        let deleted: bool =
+            Spi::get_one::<bool>(&format!("SELECT queue.delete('slc_queue', {msg_id})"))
+                .expect("delete failed")
+                .expect("delete returned NULL");
         assert!(deleted);
 
         assert_eq!(queue_depth("slc_queue"), 0);
@@ -105,11 +99,9 @@ mod tests {
     #[pg_test]
     fn test_delete_nonexistent_returns_false() {
         create("del_nex_queue");
-        let deleted: bool = Spi::get_one::<bool>(
-            "SELECT queue.delete('del_nex_queue', 99999)",
-        )
-        .expect("delete query failed")
-        .expect("delete returned NULL");
+        let deleted: bool = Spi::get_one::<bool>("SELECT queue.delete('del_nex_queue', 99999)")
+            .expect("delete query failed")
+            .expect("delete returned NULL");
         assert!(!deleted);
     }
 
@@ -144,126 +136,122 @@ mod tests {
         create("vt_queue");
         let msg_id = send("vt_queue", r#"{"x":1}"#);
 
-        // set vt 60 seconds into the future
+        // hide for 60 seconds
         Spi::run(&format!(
-            "SELECT queue.set_vt('vt_queue', {msg_id}, 60)"
+            "SELECT queue.change_visibility('vt_queue', {msg_id}, 60)"
         ))
-        .expect("set_vt failed");
+        .expect("change_visibility failed");
 
         // should not be readable
-        let count: i64 = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM queue.read('vt_queue', 1, 10)",
-        )
-        .expect("read failed")
-        .expect("count was NULL");
+        let count: i64 =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.receive('vt_queue', 1, 10)")
+                .expect("receive failed")
+                .expect("count was NULL");
         assert_eq!(count, 0, "message should be hidden by vt");
 
-        // set vt to now (reveal it)
-        Spi::run(&format!("SELECT queue.set_vt('vt_queue', {msg_id}, 0)"))
-            .expect("set_vt to 0 failed");
+        // reveal it
+        Spi::run(&format!(
+            "SELECT queue.change_visibility('vt_queue', {msg_id}, 0)"
+        ))
+        .expect("change_visibility to 0 failed");
 
         // now readable
-        let read_id: i64 = Spi::get_one::<i64>(
-            "SELECT msg_id FROM queue.read('vt_queue', 1, 1)",
-        )
-        .expect("read failed")
-        .expect("expected message");
+        let read_id: i64 =
+            Spi::get_one::<i64>("SELECT msg_id FROM queue.receive('vt_queue', 1, 1)")
+                .expect("receive failed")
+                .expect("expected message");
         assert_eq!(read_id, msg_id);
     }
 
     #[pg_test]
-    fn test_set_vt_timestamp() {
+    fn test_change_visibility_timestamp() {
         create("vt_ts_queue");
         let msg_id = send("vt_ts_queue", r#"{"x":1}"#);
 
         // set vt to a specific future timestamp
         let vt_future: bool = Spi::get_one::<bool>(&format!(
             "SELECT vt > clock_timestamp() + '30 seconds'::interval
-             FROM queue.set_vt('vt_ts_queue', {msg_id},
+             FROM queue.change_visibility('vt_ts_queue', {msg_id},
                  clock_timestamp() + '60 seconds'::interval)"
         ))
-        .expect("set_vt timestamp failed")
+        .expect("change_visibility timestamp failed")
         .expect("no row returned");
         assert!(vt_future);
 
         // not readable
-        let count: i64 = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM queue.read('vt_ts_queue', 0, 5)",
-        )
-        .expect("read failed")
-        .expect("NULL count");
+        let count: i64 =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.receive('vt_ts_queue', 0, 5)")
+                .expect("receive failed")
+                .expect("NULL count");
         assert_eq!(count, 0);
 
         // set vt to past to reveal
         Spi::run(&format!(
-            "SELECT queue.set_vt('vt_ts_queue', {msg_id},
+            "SELECT queue.change_visibility('vt_ts_queue', {msg_id},
                  clock_timestamp() - '1 second'::interval)"
         ))
-        .expect("set_vt to past failed");
+        .expect("change_visibility to past failed");
 
-        let read_id: i64 = Spi::get_one::<i64>(
-            "SELECT msg_id FROM queue.read('vt_ts_queue', 0, 1)",
-        )
-        .expect("read failed")
-        .expect("expected message");
+        let read_id: i64 =
+            Spi::get_one::<i64>("SELECT msg_id FROM queue.receive('vt_ts_queue', 0, 1)")
+                .expect("receive failed")
+                .expect("expected message");
         assert_eq!(read_id, msg_id);
     }
 
     #[pg_test]
-    fn test_set_vt_batch() {
+    fn test_change_visibility_batch() {
         create("vt_batch_queue");
         let id1 = send("vt_batch_queue", r#"{"n":1}"#);
         let id2 = send("vt_batch_queue", r#"{"n":2}"#);
 
         // hide both
         let hidden_count: i64 = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM queue.set_vt('vt_batch_queue', ARRAY[{id1},{id2}]::bigint[], 60)"
+            "SELECT COUNT(*) FROM queue.change_visibility('vt_batch_queue', ARRAY[{id1},{id2}]::bigint[], 60)"
         ))
-        .expect("batch set_vt failed")
+        .expect("batch change_visibility failed")
         .expect("NULL count");
         assert_eq!(hidden_count, 2);
 
         assert_eq!(
-            Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.read('vt_batch_queue', 0, 10)")
-                .expect("read failed")
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.receive('vt_batch_queue', 0, 10)")
+                .expect("receive failed")
                 .expect("NULL"),
             0
         );
 
         // reveal both
         Spi::run(&format!(
-            "SELECT queue.set_vt('vt_batch_queue', ARRAY[{id1},{id2}]::bigint[], 0)"
+            "SELECT queue.change_visibility('vt_batch_queue', ARRAY[{id1},{id2}]::bigint[], 0)"
         ))
         .expect("batch reveal failed");
 
-        let visible: i64 = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM queue.read('vt_batch_queue', 0, 10)",
-        )
-        .expect("read failed")
-        .expect("NULL");
+        let visible: i64 =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.receive('vt_batch_queue', 0, 10)")
+                .expect("receive failed")
+                .expect("NULL");
         assert_eq!(visible, 2);
     }
 
     // -------------------------------------------------------------------------
-    // read_with_poll
+    // receive
     // -------------------------------------------------------------------------
 
     #[pg_test]
-    fn test_read_with_poll_immediate() {
+    fn test_receive_immediate() {
         create("rwp_imm_queue");
         let msg_id = send("rwp_imm_queue", r#"{"x":1}"#);
 
         // message is immediately available, poll should return right away
-        let read_id: i64 = Spi::get_one::<i64>(
-            "SELECT msg_id FROM queue.read_with_poll('rwp_imm_queue', 30, 1, 5, 100)",
-        )
-        .expect("read_with_poll failed")
-        .expect("expected message");
+        let read_id: i64 =
+            Spi::get_one::<i64>("SELECT msg_id FROM queue.receive('rwp_imm_queue', 30, 1, 5, 100)")
+                .expect("receive failed")
+                .expect("expected message");
         assert_eq!(read_id, msg_id);
     }
 
     #[pg_test]
-    fn test_read_with_poll_respects_conditional() {
+    fn test_receive_respects_conditional() {
         create("rwp_cond_queue");
         send("rwp_cond_queue", r#"{"type":"a"}"#);
         let id_b = send("rwp_cond_queue", r#"{"type":"b"}"#);
@@ -271,23 +259,23 @@ mod tests {
         // vt=0 so first message gets locked for re-visibility immediately, but
         // the conditional only matches "b"
         let read_id: i64 = Spi::get_one::<i64>(
-            r#"SELECT msg_id FROM queue.read_with_poll(
+            r#"SELECT msg_id FROM queue.receive(
                 'rwp_cond_queue', 0, 1, 2, 100, '{"type":"b"}'::jsonb
             )"#,
         )
-        .expect("read_with_poll failed")
+        .expect("receive failed")
         .expect("expected message b");
         assert_eq!(read_id, id_b);
     }
 
     #[pg_test]
-    fn test_read_with_poll_times_out_empty() {
+    fn test_receive_times_out_empty() {
         create("rwp_empty_queue");
         // Nothing sent — should return no rows after brief poll
         let count: i64 = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM queue.read_with_poll('rwp_empty_queue', 30, 1, 1, 100)",
+            "SELECT COUNT(*) FROM queue.receive('rwp_empty_queue', 30, 1, 1, 100)",
         )
-        .expect("read_with_poll failed")
+        .expect("receive failed")
         .expect("NULL count");
         assert_eq!(count, 0);
     }
@@ -360,11 +348,10 @@ mod tests {
         });
         assert_eq!(ids.len(), 2);
         // messages should not be readable yet (delayed)
-        let visible: i64 = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM queue.read('batch_delay_q', 0, 10)",
-        )
-        .expect("read failed")
-        .expect("NULL");
+        let visible: i64 =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.receive('batch_delay_q', 0, 10)")
+                .expect("receive failed")
+                .expect("NULL");
         assert_eq!(visible, 0, "delayed messages should not be visible");
     }
 
@@ -419,10 +406,9 @@ mod tests {
         assert_eq!(queue_depth("arch_q"), 1);
         assert_eq!(archive_depth("arch_q"), 0);
 
-        let archived: bool =
-            Spi::get_one::<bool>(&format!("SELECT queue.archive('arch_q', {id})"))
-                .expect("archive failed")
-                .expect("archive returned NULL");
+        let archived: bool = Spi::get_one::<bool>(&format!("SELECT queue.archive('arch_q', {id})"))
+            .expect("archive failed")
+            .expect("archive returned NULL");
         assert!(archived);
 
         assert_eq!(queue_depth("arch_q"), 0);
@@ -468,11 +454,10 @@ mod tests {
     #[pg_test]
     fn test_archive_nonexistent_returns_empty() {
         create("arch_nex_q");
-        let archived: i64 = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM queue.archive('arch_nex_q', 99999)",
-        )
-        .expect("archive query failed")
-        .expect("NULL count");
+        let archived: i64 =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.archive('arch_nex_q', 99999)")
+                .expect("archive query failed")
+                .expect("NULL count");
         assert_eq!(archived, 0);
     }
 
@@ -485,21 +470,18 @@ mod tests {
         create("pop_q");
 
         // pop on empty queue returns nothing
-        let empty: i64 = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM queue.pop('pop_q')",
-        )
-        .expect("pop empty failed")
-        .expect("NULL count");
+        let empty: i64 = Spi::get_one::<i64>("SELECT COUNT(*) FROM queue.pop('pop_q')")
+            .expect("pop empty failed")
+            .expect("NULL count");
         assert_eq!(empty, 0);
 
         let id1 = send("pop_q", r#"{"n":1}"#);
         let _id2 = send("pop_q", r#"{"n":2}"#);
 
         // pop returns oldest first
-        let popped_id: i64 =
-            Spi::get_one::<i64>("SELECT msg_id FROM queue.pop('pop_q')")
-                .expect("pop failed")
-                .expect("expected a message");
+        let popped_id: i64 = Spi::get_one::<i64>("SELECT msg_id FROM queue.pop('pop_q')")
+            .expect("pop failed")
+            .expect("expected a message");
         assert_eq!(popped_id, id1);
 
         // gone from queue
@@ -539,7 +521,7 @@ mod tests {
         send("cond_q", r#"{"type":"a","val":3}"#);
 
         let matched: i64 = Spi::get_one::<i64>(
-            r#"SELECT msg_id FROM queue.read('cond_q', 0, 1, '{"type":"b"}'::jsonb)"#,
+            r#"SELECT msg_id FROM queue.receive('cond_q', 0, 1, '{"type":"b"}'::jsonb)"#,
         )
         .expect("conditional read failed")
         .expect("expected a match");
@@ -556,15 +538,18 @@ mod tests {
         let msg_id = send("lra_queue", r#"{"x":1}"#);
 
         // before any read, last_read_at should be NULL
-        let before: Option<pgrx::TimestampWithTimeZone> = Spi::get_one::<pgrx::TimestampWithTimeZone>(
-            &format!("SELECT last_read_at FROM queue.q_lra_queue WHERE msg_id = {msg_id}"),
-        )
-        .expect("last_read_at check failed");
-        assert!(before.is_none(), "last_read_at should be NULL before first read");
+        let before: Option<pgrx::TimestampWithTimeZone> =
+            Spi::get_one::<pgrx::TimestampWithTimeZone>(&format!(
+                "SELECT last_read_at FROM queue.q_lra_queue WHERE msg_id = {msg_id}"
+            ))
+            .expect("last_read_at check failed");
+        assert!(
+            before.is_none(),
+            "last_read_at should be NULL before first read"
+        );
 
         // read with vt=0
-        Spi::run("SELECT msg_id FROM queue.read('lra_queue', 0, 1)")
-            .expect("read failed");
+        Spi::run("SELECT msg_id FROM queue.receive('lra_queue', 0, 1)").expect("receive failed");
 
         // now should be set
         let after: bool = Spi::get_one::<bool>(&format!(
@@ -582,13 +567,13 @@ mod tests {
 
         // read twice with vt=0
         let t1: pgrx::TimestampWithTimeZone = Spi::get_one::<pgrx::TimestampWithTimeZone>(
-            "SELECT last_read_at FROM queue.read('lra2_queue', 0, 1)",
+            "SELECT last_read_at FROM queue.receive('lra2_queue', 0, 1)",
         )
         .expect("first read failed")
         .expect("last_read_at was NULL on first read");
 
         let t2: pgrx::TimestampWithTimeZone = Spi::get_one::<pgrx::TimestampWithTimeZone>(
-            "SELECT last_read_at FROM queue.read('lra2_queue', 0, 1)",
+            "SELECT last_read_at FROM queue.receive('lra2_queue', 0, 1)",
         )
         .expect("second read failed")
         .expect("last_read_at was NULL on second read");
@@ -630,8 +615,7 @@ mod tests {
     #[pg_test]
     #[should_panic]
     fn test_read_invalid_queue_name_panics() {
-        Spi::run("SELECT queue.read('bad$name', 0, 1)")
-            .expect("should have panicked");
+        Spi::run("SELECT queue.receive('bad$name', 0, 1)").expect("should have panicked");
     }
 
     // -------------------------------------------------------------------------

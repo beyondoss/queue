@@ -1,4 +1,4 @@
-//! Shared-memory waiter registry for push-based read_with_poll wakeup.
+//! Shared-memory waiter registry for push-based receive/receive_fifo wakeup.
 //!
 //! ## Design
 //!
@@ -17,8 +17,8 @@
 //!
 //! _PG_init installs shmem_request_hook + shmem_startup_hook.
 //!
-//! read_with_poll creates a WaiterGuard that registers its latch before entering
-//! the WaitLatch loop; it unregisters on drop (normal return, panic, or
+//! receive/receive_fifo create a WaiterGuard that registers their latch before
+//! entering the WaitLatch loop; it unregisters on drop (normal return, panic, or
 //! query-cancel unwind).
 //!
 //! send_full / send_batch_internal call register_notify_after_commit which
@@ -29,16 +29,16 @@
 //! ## Degraded mode
 //!
 //! If the extension is not in shared_preload_libraries, REGISTRY_READY stays false
-//! and all operations skip gracefully. read_with_poll falls back to timeout-only
+//! and all operations skip gracefully. receive falls back to timeout-only
 //! WaitLatch polling (still correct, higher latency).
 
+use pgrx::pg_sys;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use pgrx::pg_sys;
 
-const BUCKET_COUNT: usize = 256;  // power of 2 — bitmasked in hash
-const MAX_WAITERS: usize = 4096;  // upper bound ≈ max_connections
-const NAME_LEN: usize = 49;       // 48 chars (validate_name) + null
+const BUCKET_COUNT: usize = 256; // power of 2 — bitmasked in hash
+const MAX_WAITERS: usize = 4096; // upper bound ≈ max_connections
+const NAME_LEN: usize = 49; // 48 chars (validate_name) + null
 
 // ---------------------------------------------------------------------------
 // Shared-memory structs
@@ -46,17 +46,17 @@ const NAME_LEN: usize = 49;       // 48 chars (validate_name) + null
 
 #[repr(C)]
 struct WaiterSlot {
-    latch: usize,             // *mut pg_sys::Latch as usize; 0 = slot is free
-    pid: i32,                 // backend PID of the waiter
-    next: i32,                // next index in bucket or free list; -1 = end
+    latch: usize, // *mut pg_sys::Latch as usize; 0 = slot is free
+    pid: i32,     // backend PID of the waiter
+    next: i32,    // next index in bucket or free list; -1 = end
     queue_name: [u8; NAME_LEN],
 }
 
 #[repr(C)]
 struct WaiterRegistry {
     active_count: i32,
-    free_head: i32,                    // head of free-slot list; -1 = full
-    buckets: [i32; BUCKET_COUNT],      // head of per-bucket waiter list; -1 = empty
+    free_head: i32,               // head of free-slot list; -1 = full
+    buckets: [i32; BUCKET_COUNT], // head of per-bucket waiter list; -1 = empty
     slots: [WaiterSlot; MAX_WAITERS],
 }
 
@@ -122,19 +122,15 @@ unsafe extern "C-unwind" fn on_shmem_startup() {
         pg_sys::LWLockAcquire(addin_lock, pg_sys::LWLockMode::LW_EXCLUSIVE);
 
         let mut found = false;
-        let ptr = pg_sys::ShmemInitStruct(
-            SHMEM_KEY.as_ptr(),
-            registry_size(),
-            &mut found,
-        ) as *mut WaiterRegistry;
+        let ptr = pg_sys::ShmemInitStruct(SHMEM_KEY.as_ptr(), registry_size(), &mut found)
+            as *mut WaiterRegistry;
 
         if !found {
             init_registry(&mut *ptr);
         }
 
         REGISTRY = ptr;
-        REGISTRY_LOCK =
-            &raw mut (*pg_sys::GetNamedLWLockTranche(TRANCHE.as_ptr())).lock;
+        REGISTRY_LOCK = &raw mut (*pg_sys::GetNamedLWLockTranche(TRANCHE.as_ptr())).lock;
 
         pg_sys::LWLockRelease(addin_lock);
         REGISTRY_READY.store(true, Ordering::Release);
@@ -152,7 +148,11 @@ fn init_registry(reg: &mut WaiterRegistry) {
     for i in 0..MAX_WAITERS {
         reg.slots[i].latch = 0;
         reg.slots[i].pid = 0;
-        reg.slots[i].next = if i + 1 < MAX_WAITERS { (i + 1) as i32 } else { -1 };
+        reg.slots[i].next = if i + 1 < MAX_WAITERS {
+            (i + 1) as i32
+        } else {
+            -1
+        };
         reg.slots[i].queue_name = [0u8; NAME_LEN];
     }
 }
@@ -309,8 +309,7 @@ pub unsafe fn register_notify_after_commit(queue_name: &str) {
     unsafe {
         let bytes = queue_name.as_bytes();
         let len = bytes.len();
-        let p =
-            pg_sys::MemoryContextAlloc(pg_sys::TopTransactionContext, len + 1) as *mut u8;
+        let p = pg_sys::MemoryContextAlloc(pg_sys::TopTransactionContext, len + 1) as *mut u8;
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, len);
         *p.add(len) = 0;
         pg_sys::RegisterXactCallback(Some(on_xact_commit), p as *mut c_void);

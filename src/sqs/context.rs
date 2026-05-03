@@ -1,5 +1,5 @@
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -39,20 +39,14 @@ impl SqsContext {
 
     pub fn ok<T: Serialize>(&self, body: T) -> Response {
         match self.protocol {
-            SqsProtocol::Json => (
-                [("content-type", "application/x-amz-json-1.0")],
-                Json(body),
-            )
-                .into_response(),
+            SqsProtocol::Json => {
+                ([("content-type", "application/x-amz-json-1.0")], Json(body)).into_response()
+            }
             SqsProtocol::Query => {
                 // Wrap in a standard SQS Query response envelope
                 let inner = serde_json::to_value(&body).unwrap_or(serde_json::Value::Null);
                 let xml = json_to_xml_response(&inner, &self.request_id);
-                (
-                    [("content-type", "text/xml")],
-                    xml,
-                )
-                    .into_response()
+                ([("content-type", "text/xml")], xml).into_response()
             }
         }
     }
@@ -74,7 +68,11 @@ impl SqsContext {
     }
 
     pub fn queue_url(&self, queue_name: &str) -> String {
-        format!("{}/000000000000/{}", self.base_url.trim_end_matches('/'), queue_name)
+        format!(
+            "{}/000000000000/{}",
+            self.base_url.trim_end_matches('/'),
+            queue_name
+        )
     }
 }
 
@@ -109,14 +107,26 @@ fn json_value_to_xml(value: &serde_json::Value, xml: &mut String, depth: usize) 
                     }
                     serde_json::Value::Null => {}
                     _ => {
-                        let text = val.as_str().map(|s| s.to_string()).unwrap_or_else(|| val.to_string());
-                        xml.push_str(&format!("{}<{}>{}</{}>\n", indent, key, escape_xml(&text), key));
+                        let text = val
+                            .as_str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| val.to_string());
+                        xml.push_str(&format!(
+                            "{}<{}>{}</{}>\n",
+                            indent,
+                            key,
+                            escape_xml(&text),
+                            key
+                        ));
                     }
                 }
             }
         }
         _ => {
-            let text = value.as_str().map(|s| s.to_string()).unwrap_or_else(|| value.to_string());
+            let text = value
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| value.to_string());
             xml.push_str(&format!("{}{}\n", indent, escape_xml(&text)));
         }
     }

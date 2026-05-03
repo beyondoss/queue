@@ -1,10 +1,8 @@
 name: Release API
-
 on:
   push:
     tags:
       - "api-v*"
-
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -18,34 +16,27 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             artifact: pgmq-rx-linux-arm64
-
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-
       - name: Install musl tools
         run: sudo apt-get install -y musl-tools
-
       - name: Install cross
         run: cargo install cross
-
       - name: Build
         run: cross build --release --bin pgmq-rx --target ${{ matrix.target }}
         env:
           SQLX_OFFLINE: "true"
-
       - name: Rename artifact
         run: cp target/${{ matrix.target }}/release/pgmq-rx ${{ matrix.artifact }}
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
-
   release:
     needs: build
     runs-on: ubuntu-latest

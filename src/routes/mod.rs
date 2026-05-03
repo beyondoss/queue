@@ -2,14 +2,17 @@ pub mod messages;
 pub mod queues;
 pub mod topics;
 
-use axum::routing::{delete, get, post};
 use axum::Router;
+use axum::routing::{delete, get, post};
 
 use crate::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/queues", post(queues::create_queue).get(queues::list_queues))
+        .route(
+            "/queues",
+            post(queues::create_queue).get(queues::list_queues),
+        )
         .route(
             "/queues/{name}",
             get(queues::get_queue).delete(queues::delete_queue),

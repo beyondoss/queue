@@ -14,7 +14,11 @@ async fn test_create_and_list_queue() {
         .await
         .assert_status(201);
 
-    let body = client.get("/v1/queues").await.assert_status(200).json::<serde_json::Value>();
+    let body = client
+        .get("/v1/queues")
+        .await
+        .assert_status(200)
+        .json::<serde_json::Value>();
     let queues = body.as_array().expect("expected array");
     assert!(
         queues.iter().any(|q| q["name"] == "test_list_q"),
@@ -48,7 +52,10 @@ async fn test_delete_queue() {
         .await
         .assert_status(201);
 
-    client.delete("/v1/queues/test_drop_q").await.assert_status(204);
+    client
+        .delete("/v1/queues/test_drop_q")
+        .await
+        .assert_status(204);
 }
 
 // ── send / receive / delete round-trip ───────────────────────────────────────
@@ -128,7 +135,11 @@ async fn test_send_with_delay() {
         .await
         .assert_status(200)
         .json::<serde_json::Value>();
-    assert_eq!(msgs.as_array().unwrap().len(), 0, "delayed message should not be visible");
+    assert_eq!(
+        msgs.as_array().unwrap().len(),
+        0,
+        "delayed message should not be visible"
+    );
 }
 
 #[tokio::test]
@@ -311,7 +322,10 @@ async fn test_fifo_create_send_receive() {
     let client = TestClient::new();
 
     client
-        .post("/v1/queues", &serde_json::json!({ "name": "test_fifo_q", "fifo": true }))
+        .post(
+            "/v1/queues",
+            &serde_json::json!({ "name": "test_fifo_q", "fifo": true }),
+        )
         .await
         .assert_status(201);
 
@@ -345,7 +359,10 @@ async fn test_fifo_within_group_ordering() {
     let client = TestClient::new();
 
     client
-        .post("/v1/queues", &serde_json::json!({ "name": "test_fifo_order_q", "fifo": true }))
+        .post(
+            "/v1/queues",
+            &serde_json::json!({ "name": "test_fifo_order_q", "fifo": true }),
+        )
         .await
         .assert_status(201);
 
@@ -387,7 +404,10 @@ async fn test_fifo_group_locking() {
     let client = TestClient::new();
 
     client
-        .post("/v1/queues", &serde_json::json!({ "name": "test_fifo_lock_q", "fifo": true }))
+        .post(
+            "/v1/queues",
+            &serde_json::json!({ "name": "test_fifo_lock_q", "fifo": true }),
+        )
         .await
         .assert_status(201);
 
@@ -446,7 +466,10 @@ async fn test_fifo_send_batch() {
     let client = TestClient::new();
 
     client
-        .post("/v1/queues", &serde_json::json!({ "name": "test_fifo_batch_q", "fifo": true }))
+        .post(
+            "/v1/queues",
+            &serde_json::json!({ "name": "test_fifo_batch_q", "fifo": true }),
+        )
         .await
         .assert_status(201);
 
@@ -465,8 +488,7 @@ async fn test_fifo_send_batch() {
 
     let ids = resp["ids"].as_array().expect("expected ids array");
     assert_eq!(ids.len(), 3);
-    let id_set: std::collections::HashSet<i64> =
-        ids.iter().map(|v| v.as_i64().unwrap()).collect();
+    let id_set: std::collections::HashSet<i64> = ids.iter().map(|v| v.as_i64().unwrap()).collect();
     assert_eq!(id_set.len(), 3, "all ids must be distinct");
 }
 

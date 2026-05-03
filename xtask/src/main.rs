@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 fn main() -> Result<()> {
     let task = std::env::args().nth(1);

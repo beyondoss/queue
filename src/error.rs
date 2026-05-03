@@ -30,13 +30,10 @@ impl IntoResponse for ApiError {
                 StatusCode::NOT_FOUND,
                 format!("Queue '{name}' does not exist"),
             ),
-            ApiError::MessageNotFound => {
-                (StatusCode::NOT_FOUND, "Message not found".into())
+            ApiError::MessageNotFound => (StatusCode::NOT_FOUND, "Message not found".into()),
+            ApiError::InvalidReceiptHandle => {
+                (StatusCode::BAD_REQUEST, "Invalid receipt handle".into())
             }
-            ApiError::InvalidReceiptHandle => (
-                StatusCode::BAD_REQUEST,
-                "Invalid receipt handle".into(),
-            ),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             ApiError::Database(e) => {
                 tracing::error!("database error: {e}");

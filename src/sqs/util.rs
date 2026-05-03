@@ -43,10 +43,16 @@ pub fn message_attributes_to_headers(
     }
 
     if let Some(gid) = group_id {
-        map.insert("x-pgmq-group".to_string(), serde_json::Value::String(gid.clone()));
+        map.insert(
+            "x-pgmq-group".to_string(),
+            serde_json::Value::String(gid.clone()),
+        );
     }
     if let Some(did) = dedup_id {
-        map.insert("x-pgmq-dedup-id".to_string(), serde_json::Value::String(did.clone()));
+        map.insert(
+            "x-pgmq-dedup-id".to_string(),
+            serde_json::Value::String(did.clone()),
+        );
     }
 
     Some(serde_json::Value::Object(map))

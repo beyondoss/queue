@@ -7,16 +7,16 @@ pub mod util;
 
 use std::collections::HashMap;
 
+use crate::AppState;
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use axum::Router;
 use context::SqsContext;
 use error::{SqsError, SqsErrorCode, SqsProtocol};
 use types::*;
-use crate::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -82,13 +82,12 @@ fn detect_and_parse(
             .strip_prefix("AmazonSQS.")
             .unwrap_or(target)
             .to_string();
-        let value: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
+        let value: serde_json::Value =
+            serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
         Ok((SqsProtocol::Json, action, value))
     } else {
         // Query (form-encoded) or unknown — treat as Query
-        let map: HashMap<String, String> = form_urlencoded::parse(body)
-            .into_owned()
-            .collect();
+        let map: HashMap<String, String> = form_urlencoded::parse(body).into_owned().collect();
         let action = map.get("Action").cloned().unwrap_or_default();
         let value = serde_json::to_value(&map).unwrap_or(serde_json::json!({}));
         Ok((SqsProtocol::Query, action, value))
@@ -120,19 +119,34 @@ async fn dispatch_action(
 
     match action {
         "SendMessage" => dispatch!(SendMessageRequest, actions::send_message::handle),
-        "SendMessageBatch" => dispatch!(SendMessageBatchRequest, actions::send_message_batch::handle),
+        "SendMessageBatch" => {
+            dispatch!(SendMessageBatchRequest, actions::send_message_batch::handle)
+        }
         "ReceiveMessage" => dispatch!(ReceiveMessageRequest, actions::receive_message::handle),
         "DeleteMessage" => dispatch!(DeleteMessageRequest, actions::delete_message::handle),
-        "DeleteMessageBatch" => dispatch!(DeleteMessageBatchRequest, actions::delete_message_batch::handle),
-        "ChangeMessageVisibility" => dispatch!(ChangeMessageVisibilityRequest, actions::change_message_visibility::handle),
-        "ChangeMessageVisibilityBatch" => dispatch!(ChangeMessageVisibilityBatchRequest, actions::change_message_visibility_batch::handle),
+        "DeleteMessageBatch" => dispatch!(
+            DeleteMessageBatchRequest,
+            actions::delete_message_batch::handle
+        ),
+        "ChangeMessageVisibility" => dispatch!(
+            ChangeMessageVisibilityRequest,
+            actions::change_message_visibility::handle
+        ),
+        "ChangeMessageVisibilityBatch" => dispatch!(
+            ChangeMessageVisibilityBatchRequest,
+            actions::change_message_visibility_batch::handle
+        ),
         "CreateQueue" => dispatch!(CreateQueueRequest, actions::create_queue::handle),
         "DeleteQueue" => dispatch!(DeleteQueueRequest, actions::delete_queue::handle),
         "GetQueueUrl" => dispatch!(GetQueueUrlRequest, actions::get_queue_url::handle),
-        "GetQueueAttributes" => dispatch!(GetQueueAttributesRequest, actions::get_queue_attributes::handle),
+        "GetQueueAttributes" => dispatch!(
+            GetQueueAttributesRequest,
+            actions::get_queue_attributes::handle
+        ),
         "ListQueues" => {
             let req: ListQueuesRequest = serde_json::from_value(body).unwrap_or_default();
-            match actions::list_queues::handle(axum::extract::State(state.clone()), ctx, req).await {
+            match actions::list_queues::handle(axum::extract::State(state.clone()), ctx, req).await
+            {
                 Ok(r) => r.into_response(),
                 Err(e) => e.into_response(),
             }
@@ -140,7 +154,8 @@ async fn dispatch_action(
         "PurgeQueue" => dispatch!(PurgeQueueRequest, actions::purge_queue::handle),
         _ => {
             tracing::warn!(action, "unknown SQS action");
-            ctx.error(SqsErrorCode::InvalidAttributeName).into_response()
+            ctx.error(SqsErrorCode::InvalidAttributeName)
+                .into_response()
         }
     }
 }

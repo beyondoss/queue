@@ -1,12 +1,12 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::error::ApiError;
 use crate::ops::{delete, receive, send, visibility};
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct SendRequest {
@@ -104,7 +104,13 @@ pub async fn send_messages(
                 .msg_id
             } else if let Some(ref coalescer) = state.coalescer {
                 coalescer
-                    .send(name.clone(), req.message, req.headers, req.delay, sync_commit)
+                    .send(
+                        name.clone(),
+                        req.message,
+                        req.headers,
+                        req.delay,
+                        sync_commit,
+                    )
                     .await?
             } else {
                 send::send_message(
@@ -118,7 +124,10 @@ pub async fn send_messages(
                 .await?
                 .msg_id
             };
-            Ok((StatusCode::CREATED, Json(SendResponse::Single { id: msg_id })))
+            Ok((
+                StatusCode::CREATED,
+                Json(SendResponse::Single { id: msg_id }),
+            ))
         }
         SendBody::Batch(reqs) => {
             let has_group_ids = reqs.iter().any(|r| r.group_id.is_some());
@@ -169,9 +178,7 @@ pub async fn send_messages(
                 let headers: Option<Vec<serde_json::Value>> = if has_headers {
                     Some(
                         reqs.iter()
-                            .map(|r| {
-                                r.headers.clone().unwrap_or(serde_json::Value::Null)
-                            })
+                            .map(|r| r.headers.clone().unwrap_or(serde_json::Value::Null))
                             .collect(),
                     )
                 } else {

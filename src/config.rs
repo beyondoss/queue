@@ -28,11 +28,7 @@ pub struct Config {
     pub otlp_enabled: bool,
 
     /// OTLP gRPC collector endpoint.
-    #[arg(
-        long,
-        env = "OTLP_ENDPOINT",
-        default_value = "http://localhost:4317"
-    )]
+    #[arg(long, env = "OTLP_ENDPOINT", default_value = "http://localhost:4317")]
     pub otlp_endpoint: String,
 
     /// Write coalescing linger window in milliseconds.
