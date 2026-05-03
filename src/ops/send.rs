@@ -17,7 +17,7 @@ pub async fn send_message_fifo(
     sync_commit: bool,
 ) -> Result<SendResult, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT pgmq.send_fifo($1, $2::jsonb, $3, $4, $5::jsonb, clock_timestamp() + make_interval(secs => $6), $7) AS "msg_id!: i64""#,
+        r#"SELECT queue.send_fifo($1, $2::jsonb, $3, $4, $5::jsonb, clock_timestamp() + make_interval(secs => $6), $7) AS "msg_id!: i64""#,
         queue_name,
         message,
         message_group_id,
@@ -41,7 +41,7 @@ pub async fn send_message(
     sync_commit: bool,
 ) -> Result<SendResult, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT pgmq.send($1, $2::jsonb, $3::jsonb, clock_timestamp() + make_interval(secs => $4), $5) AS "msg_id!: i64""#,
+        r#"SELECT queue.send($1, $2::jsonb, $3::jsonb, clock_timestamp() + make_interval(secs => $4), $5) AS "msg_id!: i64""#,
         queue_name,
         message,
         headers,
@@ -67,7 +67,7 @@ pub async fn send_batch(
     sync_commit: bool,
 ) -> Result<BatchSendResult, ApiError> {
     let rows = sqlx::query!(
-        r#"SELECT pgmq._send_batch($1, $2::jsonb[], $3::jsonb[], clock_timestamp() + make_interval(secs => $4), $5) AS "msg_id!: i64""#,
+        r#"SELECT queue._send_batch($1, $2::jsonb[], $3::jsonb[], clock_timestamp() + make_interval(secs => $4), $5) AS "msg_id!: i64""#,
         queue_name,
         &messages as &[serde_json::Value],
         headers.as_deref(),

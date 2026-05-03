@@ -102,7 +102,7 @@ pgrx is used only where C has a unique capability unavailable in PL/pgSQL:
 - `delete`, `archive`, `pop`, `set_vt`: scalar / tiny set returns; datum overhead
   is negligible.
 
-**Do NOT implement set-returning hot paths in pgrx.** `pgmq.read` is PL/pgSQL for a
+**Do NOT implement set-returning hot paths in pgrx.** `queue.read` is PL/pgSQL for a
 reason: pgrx `TableIterator<'static, T>` extracts every datum from each row into a
 Rust type then re-encodes it when PostgreSQL fetches the row — 14 datum conversions
 per row vs PL/pgSQL's 1 heap-tuple copy. This adds 6.7× latency single-threaded and
@@ -122,15 +122,15 @@ Other pgrx constraints:
   never returns never commits, so LISTEN never registers. Use the shared-memory waiter
   registry in `waiter.rs` instead.
 
-The schema SQL (`pgmq-extension/sql/schema.sql`) defines tables, types, indexes, and
+The schema SQL (`beyond-queue-extension/sql/schema.sql`) defines tables, types, indexes, and
 non-hot functions. Hot paths are a mix: pgrx C functions override `send`, `send_batch`,
 `read_with_poll`, `delete`, `archive`, `pop`, and `set_vt`; `read` stays PL/pgSQL.
 
 When loading the extension in a fresh database alongside `hot_paths.sql`, use
 `load_pgrx_extension.sql` — some functions change their return type from
-`SETOF pgmq.message_record` to `TABLE(...)` and require `DROP` first.
+`SETOF queue.message_record` to `TABLE(...)` and require `DROP` first.
 
-### `pgmq.read` SQL Design Rules
+### `queue.read` SQL Design Rules
 
 - **No `ORDER BY msg_id ASC` in the SKIP LOCKED CTE.** Ordering forces all concurrent
   workers to scan from the same low-msg_id index root — a hot spot. Without ordering,

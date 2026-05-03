@@ -19,7 +19,7 @@ pub async fn change_visibility(
         SELECT
             msg_id  AS "msg_id!: i64",
             vt      AS "visible_at!: DateTime<Utc>"
-        FROM pgmq.set_vt($1::text, $2::bigint, $3::int)
+        FROM queue.set_vt($1::text, $2::bigint, $3::int)
         "#,
         queue_name,
         msg_id,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            queue_name          AS \"queue_name!: String\",\n            queue_length        AS \"queue_length!: i64\",\n            newest_msg_age_sec  AS \"newest_msg_age_sec?: i64\",\n            oldest_msg_age_sec  AS \"oldest_msg_age_sec?: i64\",\n            total_messages      AS \"total_messages!: i64\",\n            scrape_time         AS \"scrape_time!: DateTime<Utc>\"\n        FROM pgmq.metrics($1)\n        ",
+  "query": "\n        SELECT\n            queue_name          AS \"queue_name!: String\",\n            queue_length        AS \"queue_length!: i64\",\n            newest_msg_age_sec  AS \"newest_msg_age_sec?: i64\",\n            oldest_msg_age_sec  AS \"oldest_msg_age_sec?: i64\",\n            total_messages      AS \"total_messages!: i64\",\n            scrape_time         AS \"scrape_time!: DateTime<Utc>\"\n        FROM queue.metrics($1)\n        ",
   "describe": {
     "columns": [
       {

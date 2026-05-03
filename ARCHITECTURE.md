@@ -1,6 +1,6 @@
-# pgmq-rx Architecture
+# beyond-queue Architecture
 
-pgmq-rx is an HTTP service that accepts SQS-compatible and native REST requests, stores messages in PostgreSQL via the pgmq extension, and delivers them to consumers with visibility-timeout semantics. It is a private-network deployment: clients configure it as an SQS endpoint replacement without changing their SDK.
+beyond-queue is an HTTP service that accepts SQS-compatible and native REST requests, stores messages in PostgreSQL via the queue extension, and delivers them to consumers with visibility-timeout semantics. It is a private-network deployment: clients configure it as an SQS endpoint replacement without changing their SDK.
 
 ---
 
@@ -35,14 +35,14 @@ Router
 ### Message lifecycle (standard queue)
 
 ```
-Producer                 pgmq-rx                     PostgreSQL (pgmq extension)
+Producer                 beyond-queue                     PostgreSQL (queue extension)
    │                        │                                │
-   │── POST /v1/queues ─────►│── pgmq.create($name) ────────►│ CREATE TABLE pgmq.q_{name}
-   │   (or SQS CreateQueue)  │                               │ CREATE TABLE pgmq.a_{name}
-   │                        │                               │ INSERT INTO pgmq.meta
+   │── POST /v1/queues ─────►│── queue.create($name) ────────►│ CREATE TABLE queue.q_{name}
+   │   (or SQS CreateQueue)  │                               │ CREATE TABLE queue.a_{name}
+   │                        │                               │ INSERT INTO queue.meta
    │                        │                               │
    │── POST /v1/queues/{n}/  │                               │
-   │   messages ────────────►│── pgmq.send($name, msg, ...) ►│ INSERT INTO pgmq.q_{name}
+   │   messages ────────────►│── queue.send($name, msg, ...) ►│ INSERT INTO queue.q_{name}
    │   {message, delay}      │                               │   vt = now + delay_secs
    │◄── 201 {id} ───────────│◄── msg_id ────────────────────│
    │                        │   (XactCallback registered)   │
@@ -50,7 +50,7 @@ Producer                 pgmq-rx                     PostgreSQL (pgmq extension)
    │                        │                                     │
 Consumer                    │                                     ▼
    │── GET /v1/queues/{n}/  │                          SetLatch on waiting readers
-   │   messages?wait=5 ─────►│── pgmq.read_with_poll(         │
+   │   messages?wait=5 ─────►│── queue.read_with_poll(         │
    │                        │    $name, vt, qty,              │
    │                        │    wait_secs, 100ms) ──────────►│ LOOP:
    │                        │                               │   ResetLatch
@@ -63,7 +63,7 @@ Consumer                    │                                     ▼
    │◄── 200 [{id,message}] ─│◄── rows ──────────────────────│
    │                        │                               │
    │── DELETE /v1/queues/   │                               │
-   │   {n}/messages/{id} ───►│── pgmq.delete($name, id) ────►│ DELETE FROM pgmq.q_{name}
+   │   {n}/messages/{id} ───►│── queue.delete($name, id) ────►│ DELETE FROM queue.q_{name}
    │◄── 204 ────────────────│                               │   WHERE msg_id = $id
 ```
 
@@ -97,7 +97,7 @@ Request → ops layer → sqlx error → 500 {"error": "Database error"} + traci
 
 ### Visibility timeout (at-least-once delivery)
 
-`pgmq.read` and `pgmq.read_with_poll` atomically update `vt = now + vt_secs` and `read_ct++` in a single `UPDATE … RETURNING` statement using a `WITH … FOR UPDATE SKIP LOCKED` CTE. This means:
+`queue.read` and `queue.read_with_poll` atomically update `vt = now + vt_secs` and `read_ct++` in a single `UPDATE … RETURNING` statement using a `WITH … FOR UPDATE SKIP LOCKED` CTE. This means:
 
 - A message locked by one consumer is invisible to all others until its vt expires.
 - If a consumer crashes without deleting the message, vt expires and the message becomes visible again automatically — no external reaper needed.
@@ -116,9 +116,9 @@ Race safety: the latch is reset _before_ each read attempt, so a `SetLatch` arri
 
 **Degraded mode**: if the extension is not in `shared_preload_libraries`, `REGISTRY_READY` stays false and `WaiterGuard::new` is a no-op. `read_with_poll` falls back to `WL_TIMEOUT`-only polling — correct but higher latency.
 
-### Why `pgmq.read` stays PL/pgSQL
+### Why `queue.read` stays PL/pgSQL
 
-`pgmq.read` (the non-polling bulk read path) is implemented in PL/pgSQL, not pgrx. A pgrx `TableIterator<'static, T>` extracts every datum from each row into a Rust type then re-encodes it when PostgreSQL fetches the row — 14 datum conversions per row. PL/pgSQL `RETURN QUERY EXECUTE` copies heap tuples once. Measured delta: 6.7× latency single-threaded, ~46% slower end-to-end.
+`queue.read` (the non-polling bulk read path) is implemented in PL/pgSQL, not pgrx. A pgrx `TableIterator<'static, T>` extracts every datum from each row into a Rust type then re-encodes it when PostgreSQL fetches the row — 14 datum conversions per row. PL/pgSQL `RETURN QUERY EXECUTE` copies heap tuples once. Measured delta: 6.7× latency single-threaded, ~46% slower end-to-end.
 
 `read_with_poll` must be pgrx because `WaitLatch` cannot be called from PL/pgSQL.
 
@@ -137,11 +137,11 @@ FIFO queues are identified by `.fifo` suffix in the queue name (SQS convention).
 
 ### Topic fanout
 
-`POST /v1/topics/{routing_key}` calls `pgmq.send_topic(routing_key, msg, headers, delay)`, which:
+`POST /v1/topics/{routing_key}` calls `queue.send_topic(routing_key, msg, headers, delay)`, which:
 
 1. Validates the routing key (`[a-zA-Z0-9._-]+`, no leading/trailing/consecutive dots, max 255 chars).
-2. Queries `pgmq.topic_bindings` for all bindings where `routing_key ~ compiled_regex`.
-3. Calls `pgmq.send` once per matching queue. Returns the count of matched queues.
+2. Queries `queue.topic_bindings` for all bindings where `routing_key ~ compiled_regex`.
+3. Calls `queue.send` once per matching queue. Returns the count of matched queues.
 
 Bindings are stored as `(pattern, queue_name)` with a stored-generated `compiled_regex` column. Pattern wildcards:
 - `*` matches a single segment (no dots) → compiled to `[^.]+`
@@ -149,7 +149,7 @@ Bindings are stored as `(pattern, queue_name)` with a stored-generated `compiled
 
 ### Queue name validation
 
-`validate_name` in `pgmq-extension/src/queue.rs` enforces: 1–48 characters, `[a-z0-9_]` only. Violations raise a PostgreSQL `ERROR` via `pgrx::error!()`. SQL wrappers in schema.sql have an additional length check of 47 (off-by-one from different code paths — the pgrx check of 48 is authoritative).
+`validate_name` in `beyond-queue-extension/src/queue.rs` enforces: 1–48 characters, `[a-z0-9_]` only. Violations raise a PostgreSQL `ERROR` via `pgrx::error!()`. SQL wrappers in schema.sql have an additional length check of 47 (off-by-one from different code paths — the pgrx check of 48 is authoritative).
 
 ### Receipt handle encoding
 
@@ -202,7 +202,7 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | `ADDRESS` | `0.0.0.0:9324` | TCP bind address for the HTTP server. |
 | `DEFAULT_VISIBILITY_TIMEOUT` | `30` | Seconds applied when a `ReceiveMessage` request omits `VisibilityTimeout`. |
 | `MAX_CONNECTIONS` | `10` | Hard cap on the sqlx connection pool. Excess operations wait for a free slot. |
-| `LOG_LEVEL` | `info` | `EnvFilter` directive (e.g. `pgmq_rx=debug,info`). JSON-structured output. |
+| `LOG_LEVEL` | `info` | `EnvFilter` directive (e.g. `beyond_queue=debug,info`). JSON-structured output. |
 | `OTLP_ENABLED` | `false` | Enable OpenTelemetry OTLP trace export over gRPC. |
 | `OTLP_ENDPOINT` | `http://localhost:4317` | gRPC OTLP collector. Used when `OTLP_ENABLED=true`. |
 | `BASE_URL` | `http://{ADDRESS}` | Base URL for SQS queue URLs returned to clients (`{BASE_URL}/000000000000/{name}`). Override when behind a proxy. |
@@ -213,7 +213,7 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 
 | Failure | What Actually Happens | Recovery |
 |---|---|---|
-| Consumer crashes before deleting message | Message stays in `pgmq.q_{name}` with vt in the future. When vt expires, next read returns it again. | None needed — automatic re-delivery. `read_ct` increments on each delivery. |
+| Consumer crashes before deleting message | Message stays in `queue.q_{name}` with vt in the future. When vt expires, next read returns it again. | None needed — automatic re-delivery. `read_ct` increments on each delivery. |
 | PostgreSQL connection pool exhausted | sqlx returns `PoolTimedOut`; handler returns 500 with `{"error": "Database error"}`. | Client retries. Pool clears as in-flight connections finish. |
 | PostgreSQL unavailable at startup | `db::connect` fails; process exits non-zero. | Restart the process once PostgreSQL is available. |
 | PostgreSQL unavailable mid-flight | sqlx returns an error; handler returns 500. | Client retries. Pool reconnects on next use. |
@@ -228,17 +228,17 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 
 | Path | What It Does |
 |---|---|
-| `src/main.rs` | Binary entry point; delegates to `pgmq_rx::run()`. Sets jemalloc as allocator. |
+| `src/main.rs` | Binary entry point; delegates to `beyond_queue::run()`. Sets jemalloc as allocator. |
 | `src/lib.rs` | Wires the axum router: `/v1/` (REST) + SQS layer + `/healthz`. Attaches `require_auth` to all except healthz. |
 | `src/config.rs` | `Config` struct parsed from CLI args / env vars via clap. |
 | `src/db.rs` | Creates `PgPool` with `max_connections`. |
 | `src/middleware/auth.rs` | Checks for presence of `Authorization` header; rejects with 403 if absent. |
-| `src/ops/send.rs` | `pgmq.send`, `pgmq.send_batch`, `pgmq.send_fifo` — single/batch/FIFO inserts. |
-| `src/ops/receive.rs` | `pgmq.read_with_poll`, `pgmq.read_fifo_with_poll` — long-poll reads. |
-| `src/ops/delete.rs` | `pgmq.delete` — single and batch deletes. |
-| `src/ops/visibility.rs` | `pgmq.set_vt` — change visibility timeout by msg_id. |
-| `src/ops/queue_admin.rs` | `pgmq.create`, `pgmq.create_fifo`, `pgmq.drop_queue`, `pgmq.list_queues`, `pgmq.metrics`, `pgmq.purge_queue`. |
-| `src/ops/topic.rs` | `pgmq.send_topic` — fan-out to matching queues. |
+| `src/ops/send.rs` | `queue.send`, `queue.send_batch`, `queue.send_fifo` — single/batch/FIFO inserts. |
+| `src/ops/receive.rs` | `queue.read_with_poll`, `queue.read_fifo_with_poll` — long-poll reads. |
+| `src/ops/delete.rs` | `queue.delete` — single and batch deletes. |
+| `src/ops/visibility.rs` | `queue.set_vt` — change visibility timeout by msg_id. |
+| `src/ops/queue_admin.rs` | `queue.create`, `queue.create_fifo`, `queue.drop_queue`, `queue.list_queues`, `queue.metrics`, `queue.purge_queue`. |
+| `src/ops/topic.rs` | `queue.send_topic` — fan-out to matching queues. |
 | `src/routes/queues.rs` | `GET/POST /v1/queues`, `GET/DELETE /v1/queues/{name}`, `POST /v1/queues/{name}/purge`. |
 | `src/routes/messages.rs` | `GET/POST/DELETE /v1/queues/{name}/messages`, `DELETE/PATCH /v1/queues/{name}/messages/{id}`. |
 | `src/routes/topics.rs` | `POST /v1/topics/{routing_key}`. |
@@ -249,10 +249,10 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | `src/sqs/error.rs` | `SqsError` + `SqsErrorCode` — serializes to JSON or XML depending on protocol. |
 | `src/sqs/util.rs` | `queue_name_from_url`, `md5_of`, `message_attributes_to_headers`. |
 | `src/sqs/actions/` | One file per SQS action. Each delegates to `ops/`. |
-| `pgmq-extension/src/lib.rs` | pgrx module root. Installs shared-memory hooks in `_PG_init`. Loads `schema.sql`. |
-| `pgmq-extension/src/queue.rs` | Hot-path pgrx C functions: `send`, `send_batch` (and FIFO variants), `read_with_poll`, `read_fifo_with_poll`, `delete`, `archive`, `pop`, `set_vt`. |
-| `pgmq-extension/src/waiter.rs` | `WaiterRegistry` in shared memory. FNV-1a hash, 256 buckets, 4096 slots. `WaiterGuard` RAII, `notify_waiters`, `register_notify_after_commit`. |
-| `pgmq-extension/sql/schema.sql` | DDL for `pgmq.meta`, `pgmq.q_{name}`, `pgmq.a_{name}`, `pgmq.topic_bindings`, `pgmq.notify_insert_throttle`. PL/pgSQL functions: `read`, `read_fifo`, FIFO grouped reads, topic routing, notification system. |
+| `beyond-queue-extension/src/lib.rs` | pgrx module root. Installs shared-memory hooks in `_PG_init`. Loads `schema.sql`. |
+| `beyond-queue-extension/src/queue.rs` | Hot-path pgrx C functions: `send`, `send_batch` (and FIFO variants), `read_with_poll`, `read_fifo_with_poll`, `delete`, `archive`, `pop`, `set_vt`. |
+| `beyond-queue-extension/src/waiter.rs` | `WaiterRegistry` in shared memory. FNV-1a hash, 256 buckets, 4096 slots. `WaiterGuard` RAII, `notify_waiters`, `register_notify_after_commit`. |
+| `beyond-queue-extension/sql/schema.sql` | DDL for `queue.meta`, `queue.q_{name}`, `queue.a_{name}`, `queue.topic_bindings`, `queue.notify_insert_throttle`. PL/pgSQL functions: `read`, `read_fifo`, FIFO grouped reads, topic routing, notification system. |
 
 ---
 

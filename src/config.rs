@@ -1,7 +1,7 @@
 use clap::Parser;
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "pgmq-rx")]
+#[command(name = "beyond-queue")]
 pub struct Config {
     /// PostgreSQL connection string.
     #[arg(long, env = "DATABASE_URL")]
@@ -19,7 +19,7 @@ pub struct Config {
     #[arg(long, env = "MAX_CONNECTIONS", default_value = "10")]
     pub max_connections: u32,
 
-    /// Tracing filter directive (e.g. "info", "pgmq_rx=debug").
+    /// Tracing filter directive (e.g. "info", "beyond_queue=debug").
     #[arg(long, env = "LOG_LEVEL", default_value = "info")]
     pub log_level: String,
 

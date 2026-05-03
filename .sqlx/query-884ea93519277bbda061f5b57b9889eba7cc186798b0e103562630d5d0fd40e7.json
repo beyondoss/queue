@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT pgmq.send($1, $2::jsonb, $3::jsonb, clock_timestamp() + make_interval(secs => $4), $5) AS \"msg_id!: i64\"",
+  "query": "SELECT queue._send_batch($1, $2::jsonb[], $3::jsonb[], clock_timestamp() + make_interval(secs => $4), $5) AS \"msg_id!: i64\"",
   "describe": {
     "columns": [
       {
@@ -12,8 +12,8 @@
     "parameters": {
       "Left": [
         "Text",
-        "Jsonb",
-        "Jsonb",
+        "JsonbArray",
+        "JsonbArray",
         "Float8",
         "Bool"
       ]
@@ -22,5 +22,5 @@
       null
     ]
   },
-  "hash": "fc746b55e084d6df30d16886fe4ae436a320618f887cff83c896304875400de3"
+  "hash": "7113d9e0067fb11352478e6e60f769ce31352f003c6f5d672b3c5541a6e370a3"
 }

@@ -1,13 +1,13 @@
--- Register the pgrx-compiled hot-path functions from libpgmq_extension.so.
+-- Register the pgrx-compiled hot-path functions from libbeyond_queue_extension.so.
 -- Run this AFTER schema.sql and hot_paths.sql (or schema.sql alone) to replace
 -- the PL/pgSQL implementations with the compiled Rust versions.
 --
 -- The symbol names follow pgrx's convention: {rust_fn_name}_wrapper.
 
 -- send (canonical) — drop both the 4-arg and 5-arg PL/pgSQL overloads before installing C.
-DROP FUNCTION IF EXISTS pgmq.send(TEXT, JSONB, JSONB, TIMESTAMP WITH TIME ZONE);
-DROP FUNCTION IF EXISTS pgmq.send(TEXT, JSONB, JSONB, TIMESTAMP WITH TIME ZONE, BOOLEAN);
-CREATE FUNCTION pgmq.send(
+DROP FUNCTION IF EXISTS queue.send(TEXT, JSONB, JSONB, TIMESTAMP WITH TIME ZONE);
+DROP FUNCTION IF EXISTS queue.send(TEXT, JSONB, JSONB, TIMESTAMP WITH TIME ZONE, BOOLEAN);
+CREATE FUNCTION queue.send(
     queue_name  TEXT,
     msg         JSONB,
     headers     JSONB,
@@ -15,12 +15,12 @@ CREATE FUNCTION pgmq.send(
     sync_commit BOOLEAN DEFAULT TRUE
 ) RETURNS SETOF BIGINT
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'send_full_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'send_full_wrapper';
 
 -- _send_batch (canonical batch hot path) — same: drop old 4-arg before creating 5-arg.
-DROP FUNCTION IF EXISTS pgmq._send_batch(TEXT, JSONB[], JSONB[], TIMESTAMP WITH TIME ZONE);
-DROP FUNCTION IF EXISTS pgmq._send_batch(TEXT, JSONB[], JSONB[], TIMESTAMP WITH TIME ZONE, BOOLEAN);
-CREATE FUNCTION pgmq._send_batch(
+DROP FUNCTION IF EXISTS queue._send_batch(TEXT, JSONB[], JSONB[], TIMESTAMP WITH TIME ZONE);
+DROP FUNCTION IF EXISTS queue._send_batch(TEXT, JSONB[], JSONB[], TIMESTAMP WITH TIME ZONE, BOOLEAN);
+CREATE FUNCTION queue._send_batch(
     queue_name  TEXT,
     msgs        JSONB[],
     headers     JSONB[],
@@ -28,7 +28,7 @@ CREATE FUNCTION pgmq._send_batch(
     sync_commit BOOLEAN DEFAULT TRUE
 ) RETURNS SETOF BIGINT
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'send_batch_internal_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'send_batch_internal_wrapper';
 
 -- read: NOT overridden by pgrx.
 -- PL/pgSQL RETURN QUERY EXECUTE copies whole heap tuples (one palloc/row) and
@@ -37,9 +37,9 @@ AS '$libdir/libpgmq_extension', 'send_batch_internal_wrapper';
 -- Benchmarks: pgrx read is 6.7× slower single-threaded; PL/pgSQL version defined
 -- in hot_paths.sql already uses no ORDER BY and literal embedding.
 
--- read_with_poll — drop first (hot_paths.sql defines this as SETOF pgmq.message_record)
-DROP FUNCTION IF EXISTS pgmq.read_with_poll(TEXT, INTEGER, INTEGER, INTEGER, INTEGER, JSONB);
-CREATE FUNCTION pgmq.read_with_poll(
+-- read_with_poll — drop first (hot_paths.sql defines this as SETOF queue.message_record)
+DROP FUNCTION IF EXISTS queue.read_with_poll(TEXT, INTEGER, INTEGER, INTEGER, INTEGER, JSONB);
+CREATE FUNCTION queue.read_with_poll(
     queue_name       TEXT,
     vt               INTEGER,
     qty              INTEGER,
@@ -56,35 +56,35 @@ CREATE FUNCTION pgmq.read_with_poll(
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'read_with_poll_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'read_with_poll_wrapper';
 
 -- delete (single)
-CREATE OR REPLACE FUNCTION pgmq.delete(queue_name TEXT, msg_id BIGINT)
+CREATE OR REPLACE FUNCTION queue.delete(queue_name TEXT, msg_id BIGINT)
 RETURNS BOOLEAN
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'delete_single_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'delete_single_wrapper';
 
 -- delete (batch)
-CREATE OR REPLACE FUNCTION pgmq.delete(queue_name TEXT, msg_ids BIGINT[])
+CREATE OR REPLACE FUNCTION queue.delete(queue_name TEXT, msg_ids BIGINT[])
 RETURNS SETOF BIGINT
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'delete_batch_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'delete_batch_wrapper';
 
 -- archive (single)
-CREATE OR REPLACE FUNCTION pgmq.archive(queue_name TEXT, msg_id BIGINT)
+CREATE OR REPLACE FUNCTION queue.archive(queue_name TEXT, msg_id BIGINT)
 RETURNS BOOLEAN
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'archive_single_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'archive_single_wrapper';
 
 -- archive (batch)
-CREATE OR REPLACE FUNCTION pgmq.archive(queue_name TEXT, msg_ids BIGINT[])
+CREATE OR REPLACE FUNCTION queue.archive(queue_name TEXT, msg_ids BIGINT[])
 RETURNS SETOF BIGINT
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'archive_batch_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'archive_batch_wrapper';
 
--- pop — drop first (hot_paths.sql defines this as SETOF pgmq.message_record)
-DROP FUNCTION IF EXISTS pgmq.pop(TEXT, INTEGER);
-CREATE FUNCTION pgmq.pop(queue_name TEXT, qty INTEGER DEFAULT 1)
+-- pop — drop first (hot_paths.sql defines this as SETOF queue.message_record)
+DROP FUNCTION IF EXISTS queue.pop(TEXT, INTEGER);
+CREATE FUNCTION queue.pop(queue_name TEXT, qty INTEGER DEFAULT 1)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -95,11 +95,11 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'pop_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'pop_wrapper';
 
--- set_vt (timestamp) — drop first (hot_paths.sql defines this as SETOF pgmq.message_record)
-DROP FUNCTION IF EXISTS pgmq.set_vt(TEXT, BIGINT, TIMESTAMP WITH TIME ZONE);
-CREATE FUNCTION pgmq.set_vt(queue_name TEXT, msg_id BIGINT, vt TIMESTAMP WITH TIME ZONE)
+-- set_vt (timestamp) — drop first (hot_paths.sql defines this as SETOF queue.message_record)
+DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT, TIMESTAMP WITH TIME ZONE);
+CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_id BIGINT, vt TIMESTAMP WITH TIME ZONE)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -110,11 +110,11 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'set_vt_ts_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'set_vt_ts_wrapper';
 
--- set_vt (seconds) — drop first because schema.sql defines this as SETOF pgmq.message_record
-DROP FUNCTION IF EXISTS pgmq.set_vt(TEXT, BIGINT, INTEGER);
-CREATE FUNCTION pgmq.set_vt(queue_name TEXT, msg_id BIGINT, vt INTEGER)
+-- set_vt (seconds) — drop first because schema.sql defines this as SETOF queue.message_record
+DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT, INTEGER);
+CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_id BIGINT, vt INTEGER)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -125,11 +125,11 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'set_vt_secs_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'set_vt_secs_wrapper';
 
 -- set_vt batch (timestamp) — drop first (return type change)
-DROP FUNCTION IF EXISTS pgmq.set_vt(TEXT, BIGINT[], TIMESTAMP WITH TIME ZONE);
-CREATE FUNCTION pgmq.set_vt(queue_name TEXT, msg_ids BIGINT[], vt TIMESTAMP WITH TIME ZONE)
+DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT[], TIMESTAMP WITH TIME ZONE);
+CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_ids BIGINT[], vt TIMESTAMP WITH TIME ZONE)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -140,11 +140,11 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'set_vt_batch_ts_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'set_vt_batch_ts_wrapper';
 
 -- set_vt batch (seconds) — drop first (return type change)
-DROP FUNCTION IF EXISTS pgmq.set_vt(TEXT, BIGINT[], INTEGER);
-CREATE FUNCTION pgmq.set_vt(queue_name TEXT, msg_ids BIGINT[], vt INTEGER)
+DROP FUNCTION IF EXISTS queue.set_vt(TEXT, BIGINT[], INTEGER);
+CREATE FUNCTION queue.set_vt(queue_name TEXT, msg_ids BIGINT[], vt INTEGER)
 RETURNS TABLE (
     msg_id      BIGINT,
     read_ct     INTEGER,
@@ -155,12 +155,12 @@ RETURNS TABLE (
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'set_vt_batch_secs_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'set_vt_batch_secs_wrapper';
 
 -- send_fifo (canonical) — drop both overloads (6-arg PL/pgSQL and 7-arg stub added in hot_paths.sql).
-DROP FUNCTION IF EXISTS pgmq.send_fifo(TEXT, JSONB, TEXT, TEXT, JSONB, TIMESTAMP WITH TIME ZONE);
-DROP FUNCTION IF EXISTS pgmq.send_fifo(TEXT, JSONB, TEXT, TEXT, JSONB, TIMESTAMP WITH TIME ZONE, BOOLEAN);
-CREATE FUNCTION pgmq.send_fifo(
+DROP FUNCTION IF EXISTS queue.send_fifo(TEXT, JSONB, TEXT, TEXT, JSONB, TIMESTAMP WITH TIME ZONE);
+DROP FUNCTION IF EXISTS queue.send_fifo(TEXT, JSONB, TEXT, TEXT, JSONB, TIMESTAMP WITH TIME ZONE, BOOLEAN);
+CREATE FUNCTION queue.send_fifo(
     queue_name       TEXT,
     msg              JSONB,
     message_group_id TEXT,
@@ -170,11 +170,11 @@ CREATE FUNCTION pgmq.send_fifo(
     sync_commit      BOOLEAN DEFAULT TRUE
 ) RETURNS SETOF BIGINT
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'send_fifo_full_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'send_fifo_full_wrapper';
 
 -- read_fifo_with_poll — drop PL/pgSQL version, replace with WaitLatch C version.
-DROP FUNCTION IF EXISTS pgmq.read_fifo_with_poll(TEXT, INTEGER, INTEGER, INTEGER, INTEGER);
-CREATE FUNCTION pgmq.read_fifo_with_poll(
+DROP FUNCTION IF EXISTS queue.read_fifo_with_poll(TEXT, INTEGER, INTEGER, INTEGER, INTEGER);
+CREATE FUNCTION queue.read_fifo_with_poll(
     queue_name       TEXT,
     vt               INTEGER,
     qty              INTEGER,
@@ -190,4 +190,4 @@ CREATE FUNCTION pgmq.read_fifo_with_poll(
     headers     JSONB
 )
 LANGUAGE C VOLATILE
-AS '$libdir/libpgmq_extension', 'read_fifo_with_poll_fn_wrapper';
+AS '$libdir/libbeyond_queue_extension', 'read_fifo_with_poll_fn_wrapper';

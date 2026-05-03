@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            msg_id          AS \"msg_id!: i64\",\n            read_ct         AS \"read_count!: i32\",\n            enqueued_at     AS \"enqueued_at!: DateTime<Utc>\",\n            vt              AS \"visible_at!: DateTime<Utc>\",\n            message         AS \"message!: serde_json::Value\",\n            headers         AS \"headers?: serde_json::Value\"\n        FROM pgmq.read_with_poll($1, $2, $3, $4, 100)\n        ",
+  "query": "\n        SELECT\n            msg_id          AS \"msg_id!: i64\",\n            read_ct         AS \"read_count!: i32\",\n            enqueued_at     AS \"enqueued_at!: DateTime<Utc>\",\n            vt              AS \"visible_at!: DateTime<Utc>\",\n            message         AS \"message!: serde_json::Value\",\n            headers         AS \"headers?: serde_json::Value\"\n        FROM queue.read_fifo_with_poll($1, $2, $3, $4, 100)\n        ",
   "describe": {
     "columns": [
       {
@@ -51,5 +51,5 @@
       null
     ]
   },
-  "hash": "0ed71e4f2d9acd37a8c7cfaa5d57af7dffd02f170837ec60725d437b07e43fcc"
+  "hash": "0b50d64b5206a1a4b167ed83e6ba9137d11c217edc907f9f0a41a93b5921051d"
 }

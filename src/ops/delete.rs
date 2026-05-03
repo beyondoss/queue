@@ -8,7 +8,7 @@ pub async fn delete_message(
     msg_id: i64,
 ) -> Result<bool, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT pgmq.delete($1::text, $2::bigint) AS "deleted!: bool""#,
+        r#"SELECT queue.delete($1::text, $2::bigint) AS "deleted!: bool""#,
         queue_name,
         msg_id,
     )
@@ -24,7 +24,7 @@ pub async fn delete_batch(
     msg_ids: &[i64],
 ) -> Result<Vec<i64>, ApiError> {
     let rows = sqlx::query!(
-        r#"SELECT pgmq.delete($1::text, $2::bigint[]) AS "msg_id!: i64""#,
+        r#"SELECT queue.delete($1::text, $2::bigint[]) AS "msg_id!: i64""#,
         queue_name,
         msg_ids,
     )

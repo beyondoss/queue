@@ -59,7 +59,7 @@ pub fn test_env() -> &'static TestEnv {
                     .expect("connect to test postgres");
 
                 let schema_sql =
-                    include_str!("../pgmq-extension/sql/schema.sql");
+                    include_str!("../beyond-queue-extension/sql/schema.sql");
                 let hot_paths_sql = include_str!("fixtures/hot_paths.sql");
 
                 sqlx::raw_sql(schema_sql)
@@ -71,7 +71,7 @@ pub fn test_env() -> &'static TestEnv {
                     .await
                     .expect("hot_paths setup");
 
-                let server = pgmq_rx::test_support::start(pool.clone(), database_url)
+                let server = beyond_queue::test_support::start(pool.clone(), database_url)
                     .await
                     .expect("test server");
 

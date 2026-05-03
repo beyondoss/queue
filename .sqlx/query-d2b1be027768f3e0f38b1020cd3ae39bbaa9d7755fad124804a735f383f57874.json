@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT pgmq.create_fifo($1)",
+  "query": "SELECT queue.purge_queue($1) AS \"count!: i64\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "create_fifo",
-        "type_info": "Void"
+        "name": "count!: i64",
+        "type_info": "Int8"
       }
     ],
     "parameters": {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "5f77431b22dfc5ad6c1d24dc084b74ec5807f2aab203e0a237fb79a3ea75a92d"
+  "hash": "1f4560aaf55653c371e20109f397d3ef6cfabe5dfd4231d34e378eb9968d65fd"
 }

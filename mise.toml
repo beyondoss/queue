@@ -24,27 +24,27 @@ run = "cargo test --lib"
 [tasks."sqlx:prepare"]
 run = """
 PG_PORT=5445
-docker rm -f pgmq-sqlx-prepare 2>/dev/null || true
-docker run --rm --name pgmq-sqlx-prepare \
+docker rm -f bq-sqlx-prepare 2>/dev/null || true
+docker run --rm --name bq-sqlx-prepare \
   -e POSTGRES_PASSWORD=postgres \
   -p ${PG_PORT}:5432 \
   -d postgres:18
 echo "Waiting for postgres..."
-until docker exec pgmq-sqlx-prepare pg_isready -U postgres > /dev/null 2>&1; do sleep 0.5; done
+until docker exec bq-sqlx-prepare pg_isready -U postgres > /dev/null 2>&1; do sleep 0.5; done
 DB="postgresql://postgres:postgres@localhost:${PG_PORT}/postgres"
-docker exec pgmq-sqlx-prepare psql -U postgres -c "CREATE SCHEMA IF NOT EXISTS pgmq;"
-docker exec -i pgmq-sqlx-prepare psql -U postgres < pgmq-extension/sql/schema.sql
-docker exec -i pgmq-sqlx-prepare psql -U postgres < tests/fixtures/hot_paths.sql
+docker exec bq-sqlx-prepare psql -U postgres -c "CREATE SCHEMA IF NOT EXISTS queue;"
+docker exec -i bq-sqlx-prepare psql -U postgres < beyond-queue-extension/sql/schema.sql
+docker exec -i bq-sqlx-prepare psql -U postgres < tests/fixtures/hot_paths.sql
 DATABASE_URL="$DB" cargo sqlx prepare --workspace
-docker stop pgmq-sqlx-prepare
+docker stop bq-sqlx-prepare
 """
 
 # Build the pgrx extension .so for the host OS (requires local pg_config).
 [tasks."extension:build"]
-run = "PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release -p pgmq-extension --features pg18"
+run = "PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release -p beyond-queue-extension --features pg18"
 
 # Build the pgrx extension .so for linux/amd64 (postgres:18, glibc/Debian).
-# Output: target/release/libpgmq_extension.so
+# Output: target/release/libbeyond_queue_extension.so
 [tasks."extension:build:linux"]
 run = """
 docker run --rm --platform linux/amd64 \
@@ -55,12 +55,12 @@ docker run --rm --platform linux/amd64 \
     apt-get install -y -qq curl pkg-config libssl-dev build-essential libclang-dev clang postgresql-server-dev-18 2>/dev/null &&
     curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92 --profile minimal --quiet 2>&1 | tail -2 &&
     . "$HOME/.cargo/env" &&
-    PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release --no-default-features --features pg18 -p pgmq-extension --manifest-path /src/pgmq-extension/Cargo.toml --target-dir /src/target 2>&1 &&
-    echo "Built: /src/target/release/libpgmq_extension.so"
+    PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release --no-default-features --features pg18 -p beyond-queue-extension --manifest-path /src/beyond-queue-extension/Cargo.toml --target-dir /src/target 2>&1 &&
+    echo "Built: /src/target/release/libbeyond_queue_extension.so"
   '
 """
 
-# Compare real pgmq (PL/pgSQL) vs pgmq-rx pgrx extension.
+# Compare real pgmq (PL/pgSQL) vs beyond-queue pgrx extension.
 # Spins up two postgres:18 containers, loads schemas, runs bench, prints diff, tears down.
 # Usage: mise run bench            → quick profile
 #        mise run bench full       → full profile
@@ -80,36 +80,37 @@ BASELINE_URL="postgres://postgres:postgres@127.0.0.1:${BASELINE_PORT}/postgres"
 TREATMENT_URL="postgres://postgres:postgres@127.0.0.1:${TREATMENT_PORT}/postgres"
 OSS_PGMQ_SQL="bench/fixtures/pgmq_baseline.sql"
 
-if [ ! -f "target/release/libpgmq_extension.so" ]; then
-  echo "ERROR: target/release/libpgmq_extension.so not found." >&2
+if [ ! -f "target/release/libbeyond_queue_extension.so" ]; then
+  echo "ERROR: target/release/libbeyond_queue_extension.so not found." >&2
   echo "Run: mise run extension:build" >&2
   exit 1
 fi
 
-cleanup() { docker rm -f pgmq-bench pgmq-bench-ext > /dev/null 2>&1 || true; }
+cleanup() { docker rm -f bq-bench bq-bench-ext > /dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker rm -f pgmq-bench pgmq-bench-ext 2>/dev/null || true
+docker rm -f bq-bench bq-bench-ext 2>/dev/null || true
 
 echo "Starting postgres containers..."
-docker run -d --name pgmq-bench \
+docker run -d --name bq-bench \
   -e POSTGRES_PASSWORD=postgres -p ${BASELINE_PORT}:5432 postgres:18
 
-docker create --name pgmq-bench-ext \
+docker create --name bq-bench-ext \
   -e POSTGRES_PASSWORD=postgres -p ${TREATMENT_PORT}:5432 \
-  postgres:18 postgres -c shared_preload_libraries=libpgmq_extension
-docker cp target/release/libpgmq_extension.so \
-  pgmq-bench-ext:/usr/lib/postgresql/18/lib/libpgmq_extension.so
-docker start pgmq-bench-ext
+  postgres:18 postgres -c shared_preload_libraries=libbeyond_queue_extension
+docker cp target/release/libbeyond_queue_extension.so \
+  bq-bench-ext:/usr/lib/postgresql/18/lib/libbeyond_queue_extension.so
+docker start bq-bench-ext
 
-until docker exec pgmq-bench pg_isready -U postgres > /dev/null 2>&1; do sleep 0.3; done
-until docker exec pgmq-bench-ext pg_isready -U postgres > /dev/null 2>&1; do sleep 0.3; done
+until docker exec bq-bench pg_isready -U postgres > /dev/null 2>&1; do sleep 0.3; done
+until docker exec bq-bench-ext pg_isready -U postgres > /dev/null 2>&1; do sleep 0.3; done
 
 echo "Loading schemas..."
-docker exec -i pgmq-bench psql -U postgres < "$OSS_PGMQ_SQL" > /dev/null
-docker exec -i pgmq-bench-ext psql -U postgres < pgmq-extension/sql/schema.sql > /dev/null
-docker exec -i pgmq-bench-ext psql -U postgres < tests/fixtures/hot_paths.sql > /dev/null
-docker exec -i pgmq-bench-ext psql -U postgres < tests/fixtures/load_pgrx_extension.sql > /dev/null
+docker exec -i bq-bench psql -U postgres < "$OSS_PGMQ_SQL" > /dev/null
+docker exec bq-bench psql -U postgres -c "ALTER SCHEMA pgmq RENAME TO queue;" > /dev/null
+docker exec -i bq-bench-ext psql -U postgres < beyond-queue-extension/sql/schema.sql > /dev/null
+docker exec -i bq-bench-ext psql -U postgres < tests/fixtures/hot_paths.sql > /dev/null
+docker exec -i bq-bench-ext psql -U postgres < tests/fixtures/load_pgrx_extension.sql > /dev/null
 
 mkdir -p bench/out
 cargo build --release -p bench
@@ -121,7 +122,7 @@ cargo run --release -p bench -- \
   run-all --profile "$PROFILE" --output bench/out/baseline.json $EXTRA_ARGS
 
 echo ""
-echo "=== treatment (pgmq-rx pgrx) ==="
+echo "=== treatment (beyond-queue pgrx) ==="
 cargo run --release -p bench -- \
   --database-url "$TREATMENT_URL" \
   run-all --profile "$PROFILE" --output bench/out/treatment.json $EXTRA_ARGS

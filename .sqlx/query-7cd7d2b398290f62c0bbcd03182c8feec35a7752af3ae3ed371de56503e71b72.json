@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            queue_name      AS \"queue_name!: String\",\n            is_partitioned  AS \"is_partitioned!: bool\",\n            is_unlogged     AS \"is_unlogged!: bool\",\n            created_at      AS \"created_at!: DateTime<Utc>\"\n        FROM pgmq.list_queues()\n        ",
+  "query": "\n        SELECT\n            queue_name      AS \"queue_name!: String\",\n            is_partitioned  AS \"is_partitioned!: bool\",\n            is_unlogged     AS \"is_unlogged!: bool\",\n            created_at      AS \"created_at!: DateTime<Utc>\"\n        FROM queue.list_queues()\n        ",
   "describe": {
     "columns": [
       {

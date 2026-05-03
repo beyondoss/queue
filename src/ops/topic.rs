@@ -14,7 +14,7 @@ pub async fn send_topic(
     delay_secs: i32,
 ) -> Result<TopicSendResult, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT pgmq.send_topic($1, $2::jsonb, $3::jsonb, $4) AS "queues_matched!: i64""#,
+        r#"SELECT queue.send_topic($1, $2::jsonb, $3::jsonb, $4) AS "queues_matched!: i64""#,
         routing_key,
         message,
         headers,

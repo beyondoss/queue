@@ -20,7 +20,7 @@ pub struct QueueMetrics {
 }
 
 pub async fn create_queue(pool: &PgPool, queue_name: &str) -> Result<(), ApiError> {
-    sqlx::query!("SELECT pgmq.create($1)", queue_name)
+    sqlx::query!("SELECT queue.create($1)", queue_name)
         .execute(pool)
         .await?;
 
@@ -28,7 +28,7 @@ pub async fn create_queue(pool: &PgPool, queue_name: &str) -> Result<(), ApiErro
 }
 
 pub async fn create_fifo_queue(pool: &PgPool, queue_name: &str) -> Result<(), ApiError> {
-    sqlx::query!("SELECT pgmq.create_fifo($1)", queue_name)
+    sqlx::query!("SELECT queue.create_fifo($1)", queue_name)
         .execute(pool)
         .await?;
 
@@ -38,7 +38,7 @@ pub async fn create_fifo_queue(pool: &PgPool, queue_name: &str) -> Result<(), Ap
 
 pub async fn drop_queue(pool: &PgPool, queue_name: &str) -> Result<bool, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT pgmq.drop_queue($1) AS "dropped!: bool""#,
+        r#"SELECT queue.drop_queue($1) AS "dropped!: bool""#,
         queue_name,
     )
     .fetch_one(pool)
@@ -55,7 +55,7 @@ pub async fn list_queues(pool: &PgPool) -> Result<Vec<QueueInfo>, ApiError> {
             is_partitioned  AS "is_partitioned!: bool",
             is_unlogged     AS "is_unlogged!: bool",
             created_at      AS "created_at!: DateTime<Utc>"
-        FROM pgmq.list_queues()
+        FROM queue.list_queues()
         "#,
     )
     .fetch_all(pool)
@@ -85,7 +85,7 @@ pub async fn get_queue_metrics(
             oldest_msg_age_sec  AS "oldest_msg_age_sec?: i64",
             total_messages      AS "total_messages!: i64",
             scrape_time         AS "scrape_time!: DateTime<Utc>"
-        FROM pgmq.metrics($1)
+        FROM queue.metrics($1)
         "#,
         queue_name,
     )
@@ -108,7 +108,7 @@ pub async fn get_queue_metrics(
 
 pub async fn purge_queue(pool: &PgPool, queue_name: &str) -> Result<i64, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT pgmq.purge_queue($1) AS "count!: i64""#,
+        r#"SELECT queue.purge_queue($1) AS "count!: i64""#,
         queue_name,
     )
     .fetch_one(pool)

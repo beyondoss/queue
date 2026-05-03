@@ -2,7 +2,7 @@ use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::spi;
 
-// Column layout must match pgmq.message_record exactly:
+// Column layout must match queue.message_record exactly:
 //   msg_id, read_ct, enqueued_at, last_read_at, vt, message, headers
 //
 // NOTE: type aliases cannot appear inside #[pg_extern] return types because the pgrx
@@ -34,12 +34,12 @@ fn validate_name(queue_name: &str) {
 
 #[inline]
 fn q(name: &str) -> String {
-    format!("pgmq.q_{name}")
+    format!("queue.q_{name}")
 }
 
 #[inline]
 fn a(name: &str) -> String {
-    format!("pgmq.a_{name}")
+    format!("queue.a_{name}")
 }
 
 fn collect_msg_rows<'mcx>(
@@ -72,7 +72,7 @@ fn collect_msg_rows<'mcx>(
 const ROW_EXCLUSIVE_LOCK: pg_sys::LOCKMODE = 3;
 const NO_LOCK: pg_sys::LOCKMODE = 0;
 
-/// Insert one row directly into `pgmq.q_{queue_name}`, bypassing SPI.
+/// Insert one row directly into `queue.q_{queue_name}`, bypassing SPI.
 ///
 /// This eliminates per-call costs: SPI connection setup/teardown (~2µs),
 /// plan parsing and planning (~5µs), and parameter binding (~1µs). The
@@ -80,7 +80,7 @@ const NO_LOCK: pg_sys::LOCKMODE = 0;
 ///
 /// Index maintenance: iterates `RelationGetIndexList` and calls `index_insert`
 /// for each index. Works for column-reference indexes only — no expression
-/// indexes exist on pgmq queue tables.
+/// indexes exist on queue tables.
 ///
 /// Safety: must be called inside a PostgreSQL backend with a valid transaction.
 unsafe fn direct_heap_insert(
@@ -93,11 +93,11 @@ unsafe fn direct_heap_insert(
     use pgrx::pg_sys::*;
     use std::ffi::CString;
 
-    let pgmq_ns = get_namespace_oid(c"pgmq".as_ptr(), false);
+    let queue_ns = get_namespace_oid(c"queue".as_ptr(), false);
     let tbl_name = CString::new(format!("q_{queue_name}")).unwrap();
-    let relid = get_relname_relid(tbl_name.as_ptr(), pgmq_ns);
+    let relid = get_relname_relid(tbl_name.as_ptr(), queue_ns);
     if relid == InvalidOid {
-        pgrx::error!("queue table pgmq.q_{queue_name} does not exist");
+        pgrx::error!("queue table queue.q_{queue_name} does not exist");
     }
 
     // nextval_internal is in sequence.h but not yet exposed in pgrx's pg_sys bindings.
@@ -202,7 +202,7 @@ unsafe fn direct_heap_insert(
 // sync_commit = false issues SET LOCAL synchronous_commit = off before the INSERT,
 // making the entire containing transaction skip the WAL fsync on commit. Callers
 // opt in explicitly; the default preserves PostgreSQL's durable-commit guarantee.
-#[pg_extern(name = "send", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "send", schema = "queue", volatile, parallel_safe)]
 fn send_full(
     queue_name: &str,
     msg: pgrx::JsonB,
@@ -227,10 +227,10 @@ fn send_full(
                 .update(&insert_sql, None, &[delay.into(), msg.into(), headers.into()])?
                 .first()
                 .get::<i64>(1)?
-                .unwrap_or_else(|| pgrx::error!("pgmq.send: no msg_id returned"));
+                .unwrap_or_else(|| pgrx::error!("queue.send: no msg_id returned"));
             Ok::<_, spi::Error>(id)
         })
-        .unwrap_or_else(|e| pgrx::error!("pgmq.send: {e}"))
+        .unwrap_or_else(|e| pgrx::error!("queue.send: {e}"))
     };
 
     // Register a XactCallback to wake WaitLatch-based readers when this
@@ -244,8 +244,8 @@ fn send_full(
 // _send_batch (canonical batch hot path)
 // ---------------------------------------------------------------------------
 
-// The public pgmq.send_batch wrappers in schema.sql do validation then call this.
-#[pg_extern(name = "_send_batch", schema = "pgmq", volatile, parallel_safe)]
+// The public queue.send_batch wrappers in schema.sql do validation then call this.
+#[pg_extern(name = "_send_batch", schema = "queue", volatile, parallel_safe)]
 fn send_batch_internal(
     queue_name: &str,
     msgs: pgrx::Array<pgrx::JsonB>,
@@ -290,7 +290,7 @@ fn send_batch_internal(
         }
         Ok::<_, spi::Error>(out)
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq._send_batch: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue._send_batch: {e}"));
 
     // Wake WaitLatch-based readers when this transaction commits.
     unsafe { crate::waiter::register_notify_after_commit(queue_name) };
@@ -304,7 +304,7 @@ fn send_batch_internal(
 
 // read_with_poll: WaitLatch + shared-memory waiter registry for push-based wakeup.
 //
-// pgmq.read (the polling-free bulk read) is implemented in PL/pgSQL — not pgrx.
+// queue.read (the polling-free bulk read) is implemented in PL/pgSQL — not pgrx.
 // PL/pgSQL RETURN QUERY EXECUTE copies whole heap tuples once and streams them
 // directly; pgrx TABLE functions must extract every datum into Rust types then
 // re-encode them on return (6.7× slower single-threaded, ~46% slower end-to-end).
@@ -324,7 +324,7 @@ fn send_batch_internal(
 //         Wakes when a sender's XactCallback fires SetLatch after commit, when
 //         the deadline elapses, or when the postmaster dies.
 //      f. ProcessInterrupts() — honour Ctrl+C / statement_timeout.
-#[pg_extern(name = "read_with_poll", schema = "pgmq", volatile)]
+#[pg_extern(name = "read_with_poll", schema = "queue", volatile)]
 fn read_with_poll(
     queue_name: &str,
     vt: i32,
@@ -398,7 +398,7 @@ fn read_with_poll(
 
         let rows = if is_empty_cond {
             Spi::connect_mut(|client| collect_msg_rows(client, &read_sql_simple, &[]))
-                .unwrap_or_else(|e: spi::Error| pgrx::error!("pgmq.read_with_poll: {e}"))
+                .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.read_with_poll: {e}"))
         } else {
             Spi::connect_mut(|client| {
                 collect_msg_rows(
@@ -407,7 +407,7 @@ fn read_with_poll(
                     &[pgrx::JsonB(cond_val.clone()).into()],
                 )
             })
-            .unwrap_or_else(|e: spi::Error| pgrx::error!("pgmq.read_with_poll: {e}"))
+            .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.read_with_poll: {e}"))
         };
 
         if !rows.is_empty() {
@@ -451,7 +451,7 @@ fn read_with_poll(
 //
 // Fires the same WaitLatch XactCallback as send_full so read_fifo_with_poll
 // wakes on commit rather than spinning on poll_interval_ms.
-#[pg_extern(name = "send_fifo", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "send_fifo", schema = "queue", volatile, parallel_safe)]
 fn send_fifo_full(
     queue_name: &str,
     msg: pgrx::JsonB,
@@ -489,7 +489,7 @@ fn send_fifo_full(
         }
         Ok::<_, spi::Error>(out)
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.send_fifo: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.send_fifo: {e}"));
 
     unsafe { crate::waiter::register_notify_after_commit(queue_name) };
 
@@ -505,7 +505,7 @@ fn send_fifo_full(
 //
 // qty and vt are embedded as format-string literals for the same reason as
 // read_with_poll: generic plans with LIMIT $N degrade SKIP LOCKED throughput.
-#[pg_extern(name = "read_fifo_with_poll", schema = "pgmq", volatile)]
+#[pg_extern(name = "read_fifo_with_poll", schema = "queue", volatile)]
 fn read_fifo_with_poll_fn(
     queue_name: &str,
     vt: i32,
@@ -562,7 +562,7 @@ fn read_fifo_with_poll_fn(
         unsafe { pgrx::pg_sys::ResetLatch(pgrx::pg_sys::MyLatch) };
 
         let rows = Spi::connect_mut(|client| collect_msg_rows(client, &read_sql, &[]))
-            .unwrap_or_else(|e: spi::Error| pgrx::error!("pgmq.read_fifo_with_poll: {e}"));
+            .unwrap_or_else(|e: spi::Error| pgrx::error!("queue.read_fifo_with_poll: {e}"));
 
         if !rows.is_empty() {
             break rows;
@@ -596,7 +596,7 @@ fn read_fifo_with_poll_fn(
 // delete
 // ---------------------------------------------------------------------------
 
-#[pg_extern(name = "delete", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "delete", schema = "queue", volatile, parallel_safe)]
 fn delete_single(queue_name: &str, msg_id: i64) -> bool {
     validate_name(queue_name);
     let qtable = q(queue_name);
@@ -610,10 +610,10 @@ fn delete_single(queue_name: &str, msg_id: i64) -> bool {
             .is_some();
         Ok::<_, spi::Error>(found)
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.delete: {e}"))
+    .unwrap_or_else(|e| pgrx::error!("queue.delete: {e}"))
 }
 
-#[pg_extern(name = "delete", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "delete", schema = "queue", volatile, parallel_safe)]
 fn delete_batch(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
@@ -636,7 +636,7 @@ fn delete_batch(
         }
         Ok::<_, spi::Error>(out)
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.delete: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.delete: {e}"));
 
     SetOfIterator::new(deleted.into_iter())
 }
@@ -645,7 +645,7 @@ fn delete_batch(
 // archive
 // ---------------------------------------------------------------------------
 
-#[pg_extern(name = "archive", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "archive", schema = "queue", volatile, parallel_safe)]
 fn archive_single(queue_name: &str, msg_id: i64) -> bool {
     validate_name(queue_name);
     let qtable = q(queue_name);
@@ -669,10 +669,10 @@ fn archive_single(queue_name: &str, msg_id: i64) -> bool {
             .is_some();
         Ok::<_, spi::Error>(found)
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.archive: {e}"))
+    .unwrap_or_else(|e| pgrx::error!("queue.archive: {e}"))
 }
 
-#[pg_extern(name = "archive", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "archive", schema = "queue", volatile, parallel_safe)]
 fn archive_batch(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
@@ -702,7 +702,7 @@ fn archive_batch(
         }
         Ok::<_, spi::Error>(out)
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.archive: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.archive: {e}"));
 
     SetOfIterator::new(archived.into_iter())
 }
@@ -711,7 +711,7 @@ fn archive_batch(
 // pop
 // ---------------------------------------------------------------------------
 
-#[pg_extern(name = "pop", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "pop", schema = "queue", volatile, parallel_safe)]
 fn pop(
     queue_name: &str,
     qty: default!(i32, 1),
@@ -743,7 +743,7 @@ fn pop(
     );
 
     let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[qty.into()]))
-        .unwrap_or_else(|e| pgrx::error!("pgmq.pop: {e}"));
+        .unwrap_or_else(|e| pgrx::error!("queue.pop: {e}"));
 
     TableIterator::new(rows.into_iter())
 }
@@ -752,7 +752,7 @@ fn pop(
 // set_vt
 // ---------------------------------------------------------------------------
 
-#[pg_extern(name = "set_vt", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
 fn set_vt_ts(
     queue_name: &str,
     msg_id: i64,
@@ -780,12 +780,12 @@ fn set_vt_ts(
     let rows = Spi::connect_mut(|client| {
         collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()])
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.set_vt: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
 
     TableIterator::new(rows.into_iter())
 }
 
-#[pg_extern(name = "set_vt", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
 fn set_vt_secs(
     queue_name: &str,
     msg_id: i64,
@@ -815,12 +815,12 @@ fn set_vt_secs(
     let rows = Spi::connect_mut(|client| {
         collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()])
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.set_vt: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
 
     TableIterator::new(rows.into_iter())
 }
 
-#[pg_extern(name = "set_vt", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
 fn set_vt_batch_ts(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
@@ -849,12 +849,12 @@ fn set_vt_batch_ts(
     let rows = Spi::connect_mut(|client| {
         collect_msg_rows(client, &sql, &[vt.into(), ids.into()])
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.set_vt: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
 
     TableIterator::new(rows.into_iter())
 }
 
-#[pg_extern(name = "set_vt", schema = "pgmq", volatile, parallel_safe)]
+#[pg_extern(name = "set_vt", schema = "queue", volatile, parallel_safe)]
 fn set_vt_batch_secs(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
@@ -885,7 +885,7 @@ fn set_vt_batch_secs(
     let rows = Spi::connect_mut(|client| {
         collect_msg_rows(client, &sql, &[vt.into(), ids.into()])
     })
-    .unwrap_or_else(|e| pgrx::error!("pgmq.set_vt: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.set_vt: {e}"));
 
     TableIterator::new(rows.into_iter())
 }

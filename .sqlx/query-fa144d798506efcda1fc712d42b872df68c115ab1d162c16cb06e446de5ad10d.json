@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT pgmq.send_topic($1, $2::jsonb, $3::jsonb, $4) AS \"queues_matched!: i64\"",
+  "query": "SELECT queue.send_topic($1, $2::jsonb, $3::jsonb, $4) AS \"queues_matched!: i64\"",
   "describe": {
     "columns": [
       {

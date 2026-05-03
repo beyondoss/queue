@@ -67,8 +67,8 @@ static REGISTRY_READY: AtomicBool = AtomicBool::new(false);
 static mut PREV_SHMEM_REQUEST_HOOK: pg_sys::shmem_request_hook_type = None;
 static mut PREV_SHMEM_STARTUP_HOOK: pg_sys::shmem_startup_hook_type = None;
 
-const TRANCHE: &std::ffi::CStr = c"pgmq_waiters";
-const SHMEM_KEY: &std::ffi::CStr = c"pgmq_waiter_registry";
+const TRANCHE: &std::ffi::CStr = c"queue_waiters";
+const SHMEM_KEY: &std::ffi::CStr = c"queue_waiter_registry";
 
 fn registry_size() -> usize {
     std::mem::size_of::<WaiterRegistry>()

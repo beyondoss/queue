@@ -1,23 +1,22 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT pgmq.delete($1::text, $2::bigint) AS \"deleted!: bool\"",
+  "query": "SELECT queue.drop_queue($1) AS \"dropped!: bool\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "deleted!: bool",
+        "name": "dropped!: bool",
         "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Int8"
+        "Text"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "35620c4ccca1c0f7015acf908bdcd26091b26f663177b2bfc07f0ef5e94cf081"
+  "hash": "bad9ffd3b568d49b7ac64efe6ee27d4301ccbac5a0dccca85388801aa9784b76"
 }
