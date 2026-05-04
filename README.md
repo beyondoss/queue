@@ -1,4 +1,4 @@
-# beyond-queue
+# beyond/queue
 
 Drop-in SQS + SNS replacement backed by PostgreSQL. Runs inside your network; no external dependencies.
 
