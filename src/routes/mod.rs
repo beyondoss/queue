@@ -28,7 +28,10 @@ pub fn router() -> Router<AppState> {
             "/queues/{name}/messages/{id}",
             delete(messages::delete_message).patch(messages::change_visibility),
         )
-        .route("/queues/{name}/subscriptions", get(queues::list_subscriptions))
+        .route(
+            "/queues/{name}/subscriptions",
+            get(queues::list_subscriptions),
+        )
         .route("/topics/{routing_key}", post(topics::send_topic))
         .route(
             "/topics/{pattern}/subscriptions",

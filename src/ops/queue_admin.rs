@@ -46,7 +46,7 @@ pub async fn delete_queue(pool: &PgPool, queue_name: &str) -> Result<bool, ApiEr
     Ok(row.dropped)
 }
 
-pub async fn list_queues(pool: &PgPool) -> Result<Vec<QueueInfo>, ApiError> {
+pub async fn list_queues(pool: &PgPool, prefix: Option<&str>) -> Result<Vec<QueueInfo>, ApiError> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -54,8 +54,9 @@ pub async fn list_queues(pool: &PgPool) -> Result<Vec<QueueInfo>, ApiError> {
             is_partitioned  AS "is_partitioned!: bool",
             is_unlogged     AS "is_unlogged!: bool",
             created_at      AS "created_at!: DateTime<Utc>"
-        FROM queue.list_queues()
+        FROM queue.list_queues($1)
         "#,
+        prefix,
     )
     .fetch_all(pool)
     .await?;

@@ -105,9 +105,9 @@ $$ LANGUAGE plpgsql;
 CREATE FUNCTION queue.format_table_name(queue_name text, prefix text)
 RETURNS TEXT AS $$
 BEGIN
-    IF queue_name ~ '\$|;|--|'''
+    IF queue_name !~ '^[a-z0-9_]+$'
     THEN
-        RAISE EXCEPTION 'queue name contains invalid characters: $, ;, --, or ''';
+        RAISE EXCEPTION 'queue name contains invalid characters: must match [a-z0-9_]';
     END IF;
     RETURN lower(prefix || '_' || queue_name);
 END;
@@ -116,8 +116,8 @@ $$ LANGUAGE plpgsql;
 CREATE FUNCTION queue.validate_queue_name(queue_name TEXT)
 RETURNS void AS $$
 BEGIN
-    IF length(queue_name) > 47 THEN
-        RAISE EXCEPTION 'queue name is too long, maximum length is 47 characters';
+    IF length(queue_name) > 48 THEN
+        RAISE EXCEPTION 'queue name is too long, maximum length is 48 characters';
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -577,10 +577,14 @@ $$ LANGUAGE plpgsql;
 -- Introspection
 ------------------------------------------------------------
 
-CREATE FUNCTION queue.list_queues()
+CREATE FUNCTION queue.list_queues(prefix text DEFAULT NULL)
 RETURNS SETOF queue.queue_record AS $$
 BEGIN
-    RETURN QUERY SELECT * FROM queue.meta;
+    IF prefix IS NULL THEN
+        RETURN QUERY SELECT * FROM queue.meta ORDER BY queue_name;
+    ELSE
+        RETURN QUERY SELECT * FROM queue.meta WHERE queue_name LIKE (prefix || '%') ORDER BY queue_name;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1193,39 +1197,43 @@ CREATE OR REPLACE FUNCTION queue.validate_topic_pattern(pattern text)
 RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
 BEGIN
     IF pattern IS NULL OR pattern = '' THEN
-        RAISE EXCEPTION 'pattern cannot be NULL or empty';
+        RAISE EXCEPTION 'pattern cannot be NULL or empty' USING ERRCODE = 'Q0002';
     END IF;
     IF length(pattern) > 255 THEN
-        RAISE EXCEPTION 'pattern length cannot exceed 255 characters';
+        RAISE EXCEPTION 'pattern length cannot exceed 255 characters' USING ERRCODE = 'Q0002';
     END IF;
     IF pattern !~ '^[a-zA-Z0-9._\-*#]+$' THEN
-        RAISE EXCEPTION 'pattern contains invalid characters. Got: %', pattern;
+        RAISE EXCEPTION 'pattern contains invalid characters. Got: %', pattern USING ERRCODE = 'Q0002';
     END IF;
-    IF pattern ~ '^\.' THEN RAISE EXCEPTION 'pattern cannot start with a dot'; END IF;
-    IF pattern ~ '\.$' THEN RAISE EXCEPTION 'pattern cannot end with a dot'; END IF;
-    IF pattern ~ '\.\.' THEN RAISE EXCEPTION 'pattern cannot contain consecutive dots'; END IF;
-    IF pattern ~ '\*\*' THEN RAISE EXCEPTION 'pattern cannot contain consecutive stars (**).'; END IF;
-    IF pattern ~ '##' THEN RAISE EXCEPTION 'pattern cannot contain consecutive hashes (##).'; END IF;
+    IF pattern ~ '^\.' THEN RAISE EXCEPTION 'pattern cannot start with a dot' USING ERRCODE = 'Q0002'; END IF;
+    IF pattern ~ '\.$' THEN RAISE EXCEPTION 'pattern cannot end with a dot' USING ERRCODE = 'Q0002'; END IF;
+    IF pattern ~ '\.\.' THEN RAISE EXCEPTION 'pattern cannot contain consecutive dots' USING ERRCODE = 'Q0002'; END IF;
+    IF pattern ~ '\*\*' THEN RAISE EXCEPTION 'pattern cannot contain consecutive stars (**).' USING ERRCODE = 'Q0002'; END IF;
+    IF pattern ~ '##' THEN RAISE EXCEPTION 'pattern cannot contain consecutive hashes (##).' USING ERRCODE = 'Q0002'; END IF;
     IF pattern ~ '\*#' OR pattern ~ '#\*' THEN
-        RAISE EXCEPTION 'pattern cannot contain adjacent wildcards (*# or #*).';
+        RAISE EXCEPTION 'pattern cannot contain adjacent wildcards (*# or #*).' USING ERRCODE = 'Q0002';
     END IF;
     RETURN true;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION queue.subscribe(pattern text, queue_name text)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS TABLE(r_pattern text, r_queue_name text, r_bound_at timestamptz) LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM queue.validate_topic_pattern(pattern);
     IF queue_name IS NULL OR queue_name = '' THEN
-        RAISE EXCEPTION 'queue_name cannot be NULL or empty';
+        RAISE EXCEPTION 'queue_name cannot be NULL or empty' USING ERRCODE = 'Q0002';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM queue.meta WHERE meta.queue_name = subscribe.queue_name) THEN
-        RAISE EXCEPTION 'Queue "%" does not exist', queue_name;
+        RAISE EXCEPTION 'Queue "%" does not exist', queue_name USING ERRCODE = 'Q0001';
     END IF;
     INSERT INTO queue.topic_subscriptions (pattern, queue_name)
-    VALUES (pattern, queue_name)
+    VALUES (subscribe.pattern, subscribe.queue_name)
     ON CONFLICT ON CONSTRAINT topic_subscriptions_unique DO NOTHING;
+    RETURN QUERY
+        SELECT ts.pattern, ts.queue_name, ts.bound_at
+        FROM queue.topic_subscriptions ts
+        WHERE ts.pattern = subscribe.pattern AND ts.queue_name = subscribe.queue_name;
 END;
 $$;
 
@@ -1237,8 +1245,8 @@ BEGIN
     IF pattern IS NULL OR pattern = '' THEN RAISE EXCEPTION 'pattern cannot be NULL or empty'; END IF;
     IF queue_name IS NULL OR queue_name = '' THEN RAISE EXCEPTION 'queue_name cannot be NULL or empty'; END IF;
     DELETE FROM queue.topic_subscriptions
-    WHERE topic_bindings.pattern = unsubscribe.pattern
-      AND topic_bindings.queue_name = unsubscribe.queue_name;
+    WHERE topic_subscriptions.pattern = unsubscribe.pattern
+      AND topic_subscriptions.queue_name = unsubscribe.queue_name;
     GET DIAGNOSTICS rows_deleted = ROW_COUNT;
     RETURN rows_deleted > 0;
 END;

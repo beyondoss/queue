@@ -33,21 +33,3 @@ pub async fn change_visibility(
         visible_at: row.visible_at,
     })
 }
-
-pub struct BatchVisibilityEntry {
-    pub msg_id: i64,
-    pub vt_secs: i32,
-}
-
-pub async fn change_visibility_batch(
-    pool: &PgPool,
-    queue_name: &str,
-    entries: Vec<BatchVisibilityEntry>,
-) -> Result<Vec<VisibilityResult>, ApiError> {
-    let mut results = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let result = change_visibility(pool, queue_name, entry.msg_id, entry.vt_secs).await?;
-        results.push(result);
-    }
-    Ok(results)
-}

@@ -274,6 +274,66 @@ mod tests {
         assert_eq!(read_id, id_b);
     }
 
+    // -------------------------------------------------------------------------
+    // receive_fifo
+    // -------------------------------------------------------------------------
+
+    #[pg_test]
+    fn test_receive_fifo_selects_eligible_group() {
+        Spi::run("SELECT queue.create_fifo('fifo_elig_q')").expect("create_fifo failed");
+
+        // Group A: immediately visible.
+        let id_a1 = Spi::get_one::<i64>(
+            "SELECT * FROM queue.send_fifo('fifo_elig_q', '{\"g\":\"a\",\"n\":1}'::jsonb, 'group-a')",
+        )
+        .expect("send_fifo a1 failed")
+        .expect("no id");
+        let id_a2 = Spi::get_one::<i64>(
+            "SELECT * FROM queue.send_fifo('fifo_elig_q', '{\"g\":\"a\",\"n\":2}'::jsonb, 'group-a')",
+        )
+        .expect("send_fifo a2 failed")
+        .expect("no id");
+
+        // Group B: first message is delayed, so the group is not eligible.
+        Spi::run(
+            "SELECT queue.send_fifo('fifo_elig_q', '{\"g\":\"b\",\"n\":1}'::jsonb, 'group-b', 60)",
+        )
+        .expect("send_fifo b delayed failed");
+
+        // receive_fifo should return group A (the only eligible group), qty=2.
+        let ids: Vec<i64> = Spi::connect(|client| {
+            client
+                .select(
+                    "SELECT msg_id FROM queue.receive_fifo('fifo_elig_q', 0, 2, 1, 100)",
+                    None,
+                    &[],
+                )
+                .expect("receive_fifo failed")
+                .map(|row| row.get::<i64>(1).expect("get failed").expect("NULL"))
+                .collect()
+        });
+        assert_eq!(ids.len(), 2, "expected both group-a messages");
+        assert!(ids.contains(&id_a1));
+        assert!(ids.contains(&id_a2));
+    }
+
+    #[pg_test]
+    fn test_receive_fifo_times_out_when_no_eligible_group() {
+        Spi::run("SELECT queue.create_fifo('fifo_empty_q')").expect("create_fifo failed");
+        // All messages delayed — no eligible group.
+        Spi::run("SELECT queue.send_fifo('fifo_empty_q', '{\"x\":1}'::jsonb, 'group-x', 60)")
+            .expect("send_fifo delayed failed");
+        let count: i64 = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM queue.receive_fifo('fifo_empty_q', 0, 1, 1, 100)",
+        )
+        .expect("receive_fifo failed")
+        .expect("NULL count");
+        assert_eq!(
+            count, 0,
+            "no eligible group — should time out and return nothing"
+        );
+    }
+
     #[pg_test]
     fn test_receive_times_out_empty() {
         create("rwp_empty_queue");

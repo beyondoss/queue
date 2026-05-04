@@ -8,7 +8,9 @@ use crate::sqs::error::{SqsError, SqsErrorCode};
 use crate::sqs::types::{
     SendMessageBatchRequest, SendMessageBatchResponse, SendMessageBatchResultEntry,
 };
-use crate::sqs::util::{md5_of, message_attributes_to_headers, queue_name_from_url};
+use crate::sqs::util::{
+    md5_of, message_attributes_to_headers, queue_name_from_url, strip_fifo_suffix,
+};
 
 pub async fn handle(
     State(state): State<AppState>,
@@ -23,12 +25,7 @@ pub async fn handle(
     }
 
     let raw_name = queue_name_from_url(req.queue_url.as_deref(), &ctx)?;
-    let is_fifo = raw_name.ends_with(".fifo");
-    let queue_name = if is_fifo {
-        raw_name.strip_suffix(".fifo").unwrap().to_string()
-    } else {
-        raw_name
-    };
+    let (queue_name, is_fifo) = strip_fifo_suffix(raw_name);
 
     let msg_ids: Vec<i64> = if is_fifo {
         let mut ids = Vec::with_capacity(req.entries.len());

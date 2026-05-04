@@ -3,55 +3,25 @@ pub mod context;
 pub mod error;
 pub mod types;
 
-use std::collections::HashMap;
-
 use axum::body::Bytes;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use context::SnsContext;
-use error::{SnsError, SnsErrorCode, SnsProtocol};
+use error::{SnsErrorCode, SnsProtocol};
 use types::*;
 
 use crate::AppState;
+use crate::parse_service_body;
 
 pub async fn handle_service_request(state: AppState, headers: HeaderMap, body: Bytes) -> Response {
-    let (protocol, action, parsed) = match detect_and_parse(&headers, &body) {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-
-    let base_url = state.config.base_url();
-    let ctx = SnsContext::new(protocol, base_url, &action);
-
-    dispatch(&state, ctx, &action, parsed).await
-}
-
-fn detect_and_parse(
-    headers: &HeaderMap,
-    body: &Bytes,
-) -> Result<(SnsProtocol, String, serde_json::Value), SnsError> {
-    let content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if content_type.contains("application/x-amz-json-1.0") {
-        let target = headers
-            .get("x-amz-target")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let action = target
-            .strip_prefix("AmazonSNS.")
-            .unwrap_or(target)
-            .to_string();
-        let value = serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
-        Ok((SnsProtocol::Json, action, value))
+    let (is_json, action, parsed) = parse_service_body(&headers, &body, "AmazonSNS.");
+    let protocol = if is_json {
+        SnsProtocol::Json
     } else {
-        let map: HashMap<String, String> = form_urlencoded::parse(body).into_owned().collect();
-        let action = map.get("Action").cloned().unwrap_or_default();
-        let value = serde_json::to_value(&map).unwrap_or(serde_json::json!({}));
-        Ok((SnsProtocol::Query, action, value))
-    }
+        SnsProtocol::Query
+    };
+    let ctx = SnsContext::new(protocol, state.base_url.clone(), &action);
+    dispatch(&state, ctx, &action, parsed).await
 }
 
 async fn dispatch(
@@ -101,7 +71,10 @@ async fn dispatch(
         ),
         "Publish" => dispatch!(PublishRequest, actions::publish::handle),
         "GetTopicAttributes" => {
-            dispatch!(GetTopicAttributesRequest, actions::get_topic_attributes::handle)
+            dispatch!(
+                GetTopicAttributesRequest,
+                actions::get_topic_attributes::handle
+            )
         }
         "SetTopicAttributes" => {
             // No-op: we don't support delivery policies or filters, but return success

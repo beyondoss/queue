@@ -9,7 +9,7 @@ use crate::sqs::context::SqsContext;
 use crate::sqs::error::SqsError;
 use crate::sqs::receipt;
 use crate::sqs::types::{ReceiveMessageRequest, ReceiveMessageResponse, SqsMessage};
-use crate::sqs::util::{md5_of, queue_name_from_url};
+use crate::sqs::util::{md5_of, queue_name_from_url, strip_fifo_suffix};
 
 pub async fn handle(
     State(state): State<AppState>,
@@ -17,12 +17,7 @@ pub async fn handle(
     req: ReceiveMessageRequest,
 ) -> Result<impl IntoResponse, SqsError> {
     let raw_name = queue_name_from_url(req.queue_url.as_deref(), &ctx)?;
-    let is_fifo = raw_name.ends_with(".fifo");
-    let queue_name = if is_fifo {
-        raw_name.strip_suffix(".fifo").unwrap().to_string()
-    } else {
-        raw_name
-    };
+    let (queue_name, is_fifo) = strip_fifo_suffix(raw_name);
 
     let vt = req
         .visibility_timeout
@@ -86,10 +81,17 @@ pub async fn handle(
     }))
 }
 
+#[derive(serde::Deserialize)]
+struct StoredMessage {
+    #[serde(rename = "Body")]
+    body: String,
+}
+
 fn extract_body(message: &serde_json::Value) -> String {
-    message
-        .get("Body")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| message.to_string())
+    serde_json::from_value::<StoredMessage>(message.clone())
+        .map(|m| m.body)
+        .unwrap_or_else(|_| {
+            tracing::warn!("stored message missing Body field; serializing raw value");
+            message.to_string()
+        })
 }

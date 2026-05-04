@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -27,9 +28,11 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         base_url_override: Some(format!("http://{addr}")),
     };
 
+    let base_url: Arc<str> = config.base_url().into();
     let state = AppState {
         pool,
-        config,
+        config: Arc::new(config),
+        base_url,
         coalescer: None,
     };
     let app = crate::build_router(state);

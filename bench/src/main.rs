@@ -201,8 +201,15 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
-            let results =
-                run_all(&pool, oss_pool.as_ref(), profile, fifo, topic, args.async_commit).await?;
+            let results = run_all(
+                &pool,
+                oss_pool.as_ref(),
+                profile,
+                fifo,
+                topic,
+                args.async_commit,
+            )
+            .await?;
             print_results(&results);
             if let Some(path) = output {
                 std::fs::write(&path, serde_json::to_string_pretty(&results)?)?;
@@ -385,7 +392,11 @@ async fn setup_topic_queues(pool: &PgPool, base: &str, n: usize) -> Result<()> {
     for i in 0..n {
         let qname = format!("{base}_{i}");
         ensure_queue(pool, &qname).await?;
-        let sub_fn = if sc() == "pgmq" { "bind_topic" } else { "subscribe" };
+        let sub_fn = if sc() == "pgmq" {
+            "bind_topic"
+        } else {
+            "subscribe"
+        };
         sqlx::query(&format!("SELECT {}.{}($1, $2)", sc(), sub_fn))
             .bind(&pattern)
             .bind(&qname)
@@ -482,8 +493,9 @@ async fn run_send_batch_topic(
     for _ in 0..concurrency {
         let pool = Arc::clone(pool);
         let routing_key = routing_key.clone();
-        let msgs: Vec<serde_json::Value> =
-            (0..batch_size).map(|i| serde_json::json!({"b": i})).collect();
+        let msgs: Vec<serde_json::Value> = (0..batch_size)
+            .map(|i| serde_json::json!({"b": i}))
+            .collect();
         set.spawn(async move {
             let mut samples = Vec::with_capacity(ops_per_worker);
             for _ in 0..ops_per_worker {

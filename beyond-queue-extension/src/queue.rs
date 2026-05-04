@@ -158,10 +158,17 @@ unsafe fn direct_heap_insert(
         let mut idx_nulls: Vec<bool> = vec![false; ncols];
 
         // Extract datums by attnum for column-reference index attributes.
-        // ii_IndexAttrNumbers is 1-based; 0 would mean an expression column.
+        // ii_IndexAttrNumbers is 1-based; 0 marks an expression column which we
+        // cannot handle here — fail loudly rather than silently producing a corrupt index.
         for j in 0..ncols {
             let attnum = (*idx_info).ii_IndexAttrNumbers[j]; // i16, 1-based
-            if attnum > 0 && (attnum as usize) <= 7 {
+            if attnum == 0 {
+                pgrx::error!(
+                    "expression index on queue table is not supported with direct_heap_insert; \
+                     drop the expression index before sending messages"
+                );
+            }
+            if (attnum as usize) <= 7 {
                 idx_vals[j] = values[(attnum - 1) as usize];
                 idx_nulls[j] = nulls[(attnum - 1) as usize];
             }
@@ -529,6 +536,11 @@ fn receive_fifo_fn(
     validate_name(queue_name);
     let qtable = q(queue_name);
 
+    // eligible_group and cte both call clock_timestamp(), which is volatile and
+    // may advance by microseconds between the two evaluations within one statement.
+    // The worst case is a spurious empty result (a group that was eligible at T1
+    // has a message whose vt falls just past clock_timestamp() at T2) — not a
+    // duplicate or missed delivery.  At-least-once semantics are preserved.
     let read_sql = format!(
         "WITH eligible_group AS MATERIALIZED (
             SELECT message_group_id
@@ -729,7 +741,7 @@ fn pop(
         "WITH cte AS (
             SELECT msg_id FROM {qtable}
             WHERE vt <= clock_timestamp()
-            LIMIT $1
+            LIMIT {qty}
             FOR UPDATE SKIP LOCKED
         )
         DELETE FROM {qtable}
@@ -737,7 +749,7 @@ fn pop(
         RETURNING msg_id, read_ct, enqueued_at, last_read_at, vt, message, headers"
     );
 
-    let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[qty.into()]))
+    let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[]))
         .unwrap_or_else(|e| pgrx::error!("queue.pop: {e}"));
 
     TableIterator::new(rows.into_iter())
@@ -940,8 +952,12 @@ fn send_topic_pgrx(
                     None,
                     &[
                         delay.into(),
-                        // SAFETY: datum() copies the raw pg_sys::Datum (usize) without
-                        // moving msg_dow, so we can reconstruct per iteration.
+                        // SAFETY: datum() copies the raw pg_sys::Datum (usize) without moving
+                        // msg_dow/hdr_dow, so we can alias the pointer across loop iterations.
+                        // The underlying data lives in the function call's memory context
+                        // (CurrentMemoryContext at #[pg_extern] entry), which SPI does not
+                        // reset during client.update() — only the SPI execution context is
+                        // reset between calls.  The alias is valid for the full closure.
                         unsafe { DatumWithOid::new_from_datum(msg_dow.datum(), msg_dow.oid()) },
                         unsafe { DatumWithOid::new_from_datum(hdr_dow.datum(), hdr_dow.oid()) },
                     ],
@@ -1026,7 +1042,11 @@ fn send_batch_topic_pgrx(
                 &[
                     delay.into(),
                     // SAFETY: datum() copies the raw pg_sys::Datum (usize) without moving
-                    // msgs_dow / hdrs_dow, so we can reconstruct per iteration.
+                    // msgs_dow/hdrs_dow, so we can alias the pointer across loop iterations.
+                    // The underlying data lives in the function call's memory context
+                    // (CurrentMemoryContext at #[pg_extern] entry), which SPI does not
+                    // reset during client.update() — only the SPI execution context is
+                    // reset between calls.  The alias is valid for the full closure.
                     unsafe { DatumWithOid::new_from_datum(msgs_dow.datum(), msgs_dow.oid()) },
                     unsafe { DatumWithOid::new_from_datum(hdrs_dow.datum(), hdrs_dow.oid()) },
                 ],

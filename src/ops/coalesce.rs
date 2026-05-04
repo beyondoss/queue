@@ -128,20 +128,23 @@ struct BatchGroup {
 }
 
 impl BatchGroup {
-    async fn flush(self, pool: &PgPool) {
+    async fn flush(mut self, pool: &PgPool) {
         if self.messages.len() == 1 {
             // Single message — avoid batch overhead.
+            let message = self.messages.pop().expect("len == 1");
+            let header = self.headers.pop().expect("len == 1");
+            let tx = self.responders.pop().expect("len == 1");
             let result = send_message(
                 pool,
                 &self.queue_name,
-                self.messages.into_iter().next().unwrap(),
-                self.headers.into_iter().next().unwrap(),
+                message,
+                header,
                 self.delay,
                 self.sync_commit,
             )
             .await
             .map(|r| r.msg_id);
-            let _ = self.responders.into_iter().next().unwrap().send(result);
+            let _ = tx.send(result);
             return;
         }
 
@@ -175,10 +178,21 @@ impl BatchGroup {
                 }
             }
             Err(e) => {
-                // Batch failed: report the error message to all waiters.
+                // Fan the error out to all waiters. ApiError is not Clone, so we
+                // reconstruct per-waiter from extracted state. QueueNotFound is the
+                // one variant with a distinct 4xx status; everything else is 500.
+                let queue_not_found = if let ApiError::QueueNotFound(ref n) = e {
+                    Some(n.clone())
+                } else {
+                    None
+                };
                 let msg = e.to_string();
                 for tx in self.responders {
-                    let _ = tx.send(Err(ApiError::Internal(anyhow::anyhow!("{}", msg))));
+                    let err = match queue_not_found.clone() {
+                        Some(name) => ApiError::QueueNotFound(name),
+                        None => ApiError::Internal(anyhow::anyhow!("{}", msg)),
+                    };
+                    let _ = tx.send(Err(err));
                 }
             }
         }

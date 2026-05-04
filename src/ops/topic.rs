@@ -65,25 +65,21 @@ pub struct TopicSubscription {
 }
 
 /// Bind `queue_name` to `pattern`. Silently succeeds if already bound.
-pub async fn subscribe(pool: &PgPool, pattern: &str, queue_name: &str) -> Result<TopicSubscription, ApiError> {
-    // subscribe validates pattern and checks queue existence; raises RAISE EXCEPTION on error.
-    sqlx::query!(
-        "SELECT queue.subscribe($1, $2)",
-        pattern,
-        queue_name,
-    )
-    .execute(pool)
-    .await
-    .map_err(topic_bind_error)?;
-
+/// Single round-trip: the SQL function validates, inserts, and returns the row.
+pub async fn subscribe(
+    pool: &PgPool,
+    pattern: &str,
+    queue_name: &str,
+) -> Result<TopicSubscription, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT pattern, queue_name, bound_at FROM queue.topic_subscriptions
-           WHERE pattern = $1 AND queue_name = $2"#,
+        r#"SELECT r_pattern AS "pattern!", r_queue_name AS "queue_name!", r_bound_at AS "bound_at!: DateTime<Utc>"
+           FROM queue.subscribe($1, $2)"#,
         pattern,
         queue_name,
     )
     .fetch_one(pool)
-    .await?;
+    .await
+    .map_err(topic_bind_error)?;
 
     Ok(TopicSubscription {
         pattern: row.pattern,
@@ -110,7 +106,10 @@ pub async fn unsubscribe(pool: &PgPool, pattern: &str, queue_name: &str) -> Resu
 }
 
 /// All queues bound to `pattern`, ordered by queue name.
-pub async fn list_by_pattern(pool: &PgPool, pattern: &str) -> Result<Vec<TopicSubscription>, ApiError> {
+pub async fn list_by_pattern(
+    pool: &PgPool,
+    pattern: &str,
+) -> Result<Vec<TopicSubscription>, ApiError> {
     let rows = sqlx::query!(
         r#"SELECT pattern, queue_name, bound_at
            FROM queue.topic_subscriptions
@@ -153,11 +152,10 @@ pub async fn list_all_subscriptions(pool: &PgPool) -> Result<Vec<TopicSubscripti
 
 /// Distinct topic names derived from active subscriptions, for SNS ListTopics.
 pub async fn list_sns_topics(pool: &PgPool) -> Result<Vec<String>, ApiError> {
-    let rows = sqlx::query!(
-        "SELECT DISTINCT pattern FROM queue.topic_subscriptions ORDER BY pattern",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query!("SELECT DISTINCT pattern FROM queue.topic_subscriptions ORDER BY pattern",)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.into_iter().map(|r| r.pattern).collect())
 }
 
@@ -173,7 +171,10 @@ pub async fn delete_sns_topic(pool: &PgPool, pattern: &str) -> Result<(), ApiErr
 }
 
 /// All patterns `queue_name` is bound to, ordered by pattern.
-pub async fn list_by_queue(pool: &PgPool, queue_name: &str) -> Result<Vec<TopicSubscription>, ApiError> {
+pub async fn list_by_queue(
+    pool: &PgPool,
+    queue_name: &str,
+) -> Result<Vec<TopicSubscription>, ApiError> {
     let rows = sqlx::query!(
         r#"SELECT pattern, queue_name, bound_at
            FROM queue.topic_subscriptions

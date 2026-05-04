@@ -31,6 +31,7 @@ pub struct SendMessageRequest {
 #[serde(rename_all = "PascalCase")]
 pub struct SendMessageResponse {
     pub message_id: String,
+    #[serde(rename = "MD5OfMessageBody")]
     pub md5_of_message_body: String,
 }
 
@@ -61,6 +62,7 @@ pub struct SendMessageBatchRequest {
 pub struct SendMessageBatchResultEntry {
     pub id: String,
     pub message_id: String,
+    #[serde(rename = "MD5OfMessageBody")]
     pub md5_of_message_body: String,
 }
 
@@ -98,6 +100,7 @@ pub struct SqsMessage {
     pub message_id: String,
     pub receipt_handle: String,
     pub body: String,
+    #[serde(rename = "MD5OfBody")]
     pub md5_of_body: String,
     pub attributes: HashMap<String, String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]

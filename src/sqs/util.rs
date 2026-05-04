@@ -4,6 +4,15 @@ use crate::sqs::context::SqsContext;
 use crate::sqs::error::{SqsError, SqsErrorCode};
 use crate::sqs::types::MessageAttribute;
 
+/// Strips the `.fifo` suffix from a queue name and returns `(base_name, is_fifo)`.
+pub fn strip_fifo_suffix(name: String) -> (String, bool) {
+    if let Some(base) = name.strip_suffix(".fifo") {
+        (base.to_string(), true)
+    } else {
+        (name, false)
+    }
+}
+
 pub fn queue_name_from_url<'a>(
     queue_url: Option<&'a str>,
     ctx: &SqsContext,

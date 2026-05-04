@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
@@ -12,12 +14,12 @@ const ACCOUNT: &str = "000000000000";
 pub struct SnsContext {
     pub protocol: SnsProtocol,
     pub request_id: String,
-    pub base_url: String,
+    pub base_url: Arc<str>,
     pub action: String,
 }
 
 impl SnsContext {
-    pub fn new(protocol: SnsProtocol, base_url: String, action: impl Into<String>) -> Self {
+    pub fn new(protocol: SnsProtocol, base_url: Arc<str>, action: impl Into<String>) -> Self {
         Self {
             protocol,
             request_id: Uuid::new_v4().to_string(),

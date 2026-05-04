@@ -24,7 +24,10 @@ pub async fn handle(
     attrs.insert("Protocol".to_string(), "sqs".to_string());
     attrs.insert("Endpoint".to_string(), ctx.queue_endpoint(&queue_name));
     attrs.insert("PendingConfirmation".to_string(), "false".to_string());
-    attrs.insert("ConfirmationWasAuthenticated".to_string(), "true".to_string());
+    attrs.insert(
+        "ConfirmationWasAuthenticated".to_string(),
+        "true".to_string(),
+    );
     attrs.insert("RawMessageDelivery".to_string(), "false".to_string());
 
     Ok(ctx.ok(GetSubscriptionAttributesResponse { attributes: attrs }))

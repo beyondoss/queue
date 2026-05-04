@@ -5,9 +5,8 @@ pub mod receipt;
 pub mod types;
 pub mod util;
 
-use std::collections::HashMap;
-
 use crate::AppState;
+use crate::parse_service_body;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -15,23 +14,23 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use context::SqsContext;
-use error::{SqsError, SqsErrorCode, SqsProtocol};
+use error::{SqsErrorCode, SqsProtocol};
 use types::*;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/{account_id}/{queue_name}", post(queue_handler))
+    Router::new().route("/{account_id}/{queue_name}", post(queue_handler))
     // POST / is handled by the gateway in lib.rs to allow SNS/SQS co-dispatch
 }
 
 pub async fn handle_service_request(state: AppState, headers: HeaderMap, body: Bytes) -> Response {
-    let (protocol, action, parsed) = match detect_and_parse(&headers, &body) {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
+    let (is_json, action, parsed) = parse_service_body(&headers, &body, "AmazonSQS.");
+    let protocol = if is_json {
+        SqsProtocol::Json
+    } else {
+        SqsProtocol::Query
     };
-    let base_url = state.config.base_url();
-    let ctx = SqsContext::new(protocol, base_url);
-    dispatch_action(&state, ctx, &action, parsed, protocol).await
+    let ctx = SqsContext::new(protocol, state.base_url.clone(), &action);
+    dispatch_action(&state, ctx, &action, parsed).await
 }
 
 async fn queue_handler(
@@ -40,13 +39,13 @@ async fn queue_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let (protocol, action, mut parsed) = match detect_and_parse(&headers, &body) {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
+    let (is_json, action, mut parsed) = parse_service_body(&headers, &body, "AmazonSQS.");
+    let protocol = if is_json {
+        SqsProtocol::Json
+    } else {
+        SqsProtocol::Query
     };
-
-    let base_url = state.config.base_url();
-    let ctx = SqsContext::new(protocol, base_url);
+    let ctx = SqsContext::new(protocol, state.base_url.clone(), &action);
     let queue_url = ctx.queue_url(&queue_name);
 
     // Inject QueueUrl from path if not present in body
@@ -55,37 +54,7 @@ async fn queue_handler(
             .or_insert_with(|| serde_json::Value::String(queue_url));
     }
 
-    dispatch_action(&state, ctx, &action, parsed, protocol).await
-}
-
-fn detect_and_parse(
-    headers: &HeaderMap,
-    body: &Bytes,
-) -> Result<(SqsProtocol, String, serde_json::Value), SqsError> {
-    let content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if content_type.contains("application/x-amz-json-1.0") {
-        let target = headers
-            .get("x-amz-target")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let action = target
-            .strip_prefix("AmazonSQS.")
-            .unwrap_or(target)
-            .to_string();
-        let value: serde_json::Value =
-            serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
-        Ok((SqsProtocol::Json, action, value))
-    } else {
-        // Query (form-encoded) or unknown — treat as Query
-        let map: HashMap<String, String> = form_urlencoded::parse(body).into_owned().collect();
-        let action = map.get("Action").cloned().unwrap_or_default();
-        let value = serde_json::to_value(&map).unwrap_or(serde_json::json!({}));
-        Ok((SqsProtocol::Query, action, value))
-    }
+    dispatch_action(&state, ctx, &action, parsed).await
 }
 
 async fn dispatch_action(
@@ -93,7 +62,6 @@ async fn dispatch_action(
     ctx: SqsContext,
     action: &str,
     body: serde_json::Value,
-    _protocol: SqsProtocol,
 ) -> Response {
     macro_rules! dispatch {
         ($req_type:ty, $handler:path) => {{

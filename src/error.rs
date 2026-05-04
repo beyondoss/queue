@@ -55,16 +55,14 @@ impl IntoResponse for ApiError {
 }
 
 /// Translate a PostgreSQL error from a topic binding operation into a typed ApiError.
-/// subscribe raises RAISE EXCEPTION for queue-not-found and invalid-pattern cases.
+/// subscribe raises RAISE EXCEPTION USING ERRCODE for structured classification:
+///   Q0001 → queue not found, Q0002 → bad request (invalid pattern or name).
 pub fn topic_bind_error(e: sqlx::Error) -> ApiError {
     if let sqlx::Error::Database(ref db_err) = e {
-        let msg = db_err.message();
-        if msg.contains("does not exist") {
-            // "Queue "foo" does not exist"
-            return ApiError::QueueNotFound(msg.to_string());
-        }
-        if msg.contains("invalid") || msg.contains("pattern") || msg.contains("NULL") || msg.contains("empty") {
-            return ApiError::BadRequest(msg.to_string());
+        match db_err.code().as_deref() {
+            Some("Q0001") => return ApiError::QueueNotFound(db_err.message().to_string()),
+            Some("Q0002") => return ApiError::BadRequest(db_err.message().to_string()),
+            _ => {}
         }
     }
     ApiError::Database(e)

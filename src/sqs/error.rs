@@ -54,7 +54,7 @@ impl SqsErrorCode {
             Self::QueueAlreadyExists => {
                 "A queue already exists with the same name and a different value for attribute."
             }
-            Self::InvalidAttributeName => "Unknown attribute: %s.",
+            Self::InvalidAttributeName => "Unknown attribute.",
             Self::InternalError => "We encountered an internal error. Please try again.",
         }
     }

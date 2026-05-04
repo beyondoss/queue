@@ -8,6 +8,9 @@ pub mod sns;
 pub mod sqs;
 pub mod test_support;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -25,9 +28,43 @@ use ops::coalesce::Coalescer;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
-    pub config: Config,
+    /// Config is Arc-wrapped so AppState::clone() is cheap (Arc increment, no String copies).
+    pub config: Arc<Config>,
+    /// Precomputed base URL — Arc<str> clone is a single atomic increment.
+    pub base_url: Arc<str>,
     /// Write coalescer for non-FIFO sends. None when LINGER_MS=0.
     pub coalescer: Option<Coalescer>,
+}
+
+/// Parse an AWS service request body: returns (is_json, action_name, parsed_body).
+/// `service_prefix` is e.g. `"AmazonSQS."` or `"AmazonSNS."`.
+pub fn parse_service_body(
+    headers: &HeaderMap,
+    body: &Bytes,
+    service_prefix: &str,
+) -> (bool, String, serde_json::Value) {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if content_type.contains("application/x-amz-json-1.0") {
+        let target = headers
+            .get("x-amz-target")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let action = target
+            .strip_prefix(service_prefix)
+            .unwrap_or(target)
+            .to_string();
+        let value = serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
+        (true, action, value)
+    } else {
+        let map: HashMap<String, String> = form_urlencoded::parse(body).into_owned().collect();
+        let action = map.get("Action").cloned().unwrap_or_default();
+        let value = serde_json::to_value(&map).unwrap_or(serde_json::json!({}));
+        (false, action, value)
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -44,17 +81,38 @@ pub async fn run() -> anyhow::Result<()> {
         None
     };
 
+    let base_url: Arc<str> = config.base_url().into();
+    let address = config.address.clone();
     let state = AppState {
         pool,
-        config: config.clone(),
+        config: Arc::new(config),
+        base_url,
         coalescer,
     };
 
     let app = build_router(state);
-    let listener = tokio::net::TcpListener::bind(&config.address).await?;
-    tracing::info!(address = %config.address, "listening");
+    let listener = tokio::net::TcpListener::bind(&address).await?;
+    tracing::info!(address = %address, "listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn is_sns_query_action(action: &str) -> bool {
+    matches!(
+        action,
+        "CreateTopic"
+            | "DeleteTopic"
+            | "ListTopics"
+            | "Subscribe"
+            | "Unsubscribe"
+            | "ListSubscriptions"
+            | "ListSubscriptionsByTopic"
+            | "Publish"
+            | "GetTopicAttributes"
+            | "SetTopicAttributes"
+            | "GetSubscriptionAttributes"
+            | "ConfirmSubscription"
+    )
 }
 
 async fn gateway_handler(
@@ -68,10 +126,26 @@ async fn gateway_handler(
         .unwrap_or("");
 
     if target.starts_with("AmazonSNS.") {
-        sns::handle_service_request(state, headers, body).await
-    } else {
-        sqs::handle_service_request(state, headers, body).await
+        return sns::handle_service_request(state, headers, body).await;
     }
+
+    // Query-protocol (form-urlencoded) SNS requests carry no X-Amz-Target header.
+    // Detect them by peeking at the Action field in the body.
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !content_type.contains("application/x-amz-json-1.0") {
+        let action = form_urlencoded::parse(&body)
+            .find(|(k, _)| k == "Action")
+            .map(|(_, v)| v.into_owned())
+            .unwrap_or_default();
+        if is_sns_query_action(&action) {
+            return sns::handle_service_request(state, headers, body).await;
+        }
+    }
+
+    sqs::handle_service_request(state, headers, body).await
 }
 
 pub fn build_router(state: AppState) -> Router {

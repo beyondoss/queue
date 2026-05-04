@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
@@ -12,15 +14,17 @@ use crate::sqs::error::{SqsError, SqsErrorCode, SqsProtocol};
 pub struct SqsContext {
     pub protocol: SqsProtocol,
     pub request_id: String,
-    pub base_url: String,
+    pub base_url: Arc<str>,
+    pub action: String,
 }
 
 impl SqsContext {
-    pub fn new(protocol: SqsProtocol, base_url: String) -> Self {
+    pub fn new(protocol: SqsProtocol, base_url: Arc<str>, action: impl Into<String>) -> Self {
         Self {
             protocol,
             request_id: Uuid::new_v4().to_string(),
             base_url,
+            action: action.into(),
         }
     }
 
@@ -43,9 +47,8 @@ impl SqsContext {
                 ([("content-type", "application/x-amz-json-1.0")], Json(body)).into_response()
             }
             SqsProtocol::Query => {
-                // Wrap in a standard SQS Query response envelope
                 let inner = serde_json::to_value(&body).unwrap_or(serde_json::Value::Null);
-                let xml = json_to_xml_response(&inner, &self.request_id);
+                let xml = action_xml_response(&inner, &self.action, &self.request_id);
                 ([("content-type", "text/xml")], xml).into_response()
             }
         }
@@ -56,11 +59,13 @@ impl SqsContext {
             SqsProtocol::Json => (axum::http::StatusCode::OK, "{}").into_response(),
             SqsProtocol::Query => {
                 let xml = format!(
-                    r#"<?xml version="1.0" encoding="UTF-8"?>
-<ResponseMetadata>
-  <RequestId>{}</RequestId>
-</ResponseMetadata>"#,
-                    self.request_id
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                     <{}Response>\n  \
+                       <ResponseMetadata>\n    \
+                         <RequestId>{}</RequestId>\n  \
+                       </ResponseMetadata>\n\
+                     </{}Response>",
+                    self.action, self.request_id, self.action,
                 );
                 ([("content-type", "text/xml")], xml).into_response()
             }
@@ -76,58 +81,59 @@ impl SqsContext {
     }
 }
 
-fn json_to_xml_response(value: &serde_json::Value, request_id: &str) -> String {
-    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n");
-    json_value_to_xml(value, &mut xml, 1);
+/// Generates a standard SQS Query response envelope:
+/// `<{Action}Response><{Action}Result>…</{Action}Result><ResponseMetadata>…</ResponseMetadata></{Action}Response>`
+fn action_xml_response(value: &serde_json::Value, action: &str, request_id: &str) -> String {
+    let mut xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <{action}Response>\n  \
+           <{action}Result>\n",
+    );
+    if let serde_json::Value::Object(map) = value {
+        for (key, val) in map {
+            json_value_to_xml(val, key, &mut xml, 2);
+        }
+    }
     xml.push_str(&format!(
-        "  <ResponseMetadata>\n    <RequestId>{}</RequestId>\n  </ResponseMetadata>\n",
-        request_id
+        "  </{action}Result>\n  \
+         <ResponseMetadata>\n    \
+           <RequestId>{request_id}</RequestId>\n  \
+         </ResponseMetadata>\n\
+         </{action}Response>",
     ));
-    xml.push_str("</Response>");
     xml
 }
 
-fn json_value_to_xml(value: &serde_json::Value, xml: &mut String, depth: usize) {
+fn json_value_to_xml(value: &serde_json::Value, tag: &str, xml: &mut String, depth: usize) {
     let indent = "  ".repeat(depth);
     match value {
-        serde_json::Value::Object(map) => {
-            for (key, val) in map {
-                match val {
-                    serde_json::Value::Array(arr) => {
-                        for item in arr {
-                            xml.push_str(&format!("{}<{}>\n", indent, key));
-                            json_value_to_xml(item, xml, depth + 1);
-                            xml.push_str(&format!("{}</{}>\n", indent, key));
-                        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                xml.push_str(&format!("{indent}<{tag}>\n"));
+                if let serde_json::Value::Object(m) = item {
+                    for (k, v) in m {
+                        json_value_to_xml(v, k, xml, depth + 1);
                     }
-                    serde_json::Value::Object(_) => {
-                        xml.push_str(&format!("{}<{}>\n", indent, key));
-                        json_value_to_xml(val, xml, depth + 1);
-                        xml.push_str(&format!("{}</{}>\n", indent, key));
-                    }
-                    serde_json::Value::Null => {}
-                    _ => {
-                        let text = val
-                            .as_str()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| val.to_string());
-                        xml.push_str(&format!(
-                            "{}<{}>{}</{}>\n",
-                            indent,
-                            key,
-                            escape_xml(&text),
-                            key
-                        ));
-                    }
+                } else {
+                    json_value_to_xml(item, tag, xml, depth + 1);
                 }
+                xml.push_str(&format!("{indent}</{tag}>\n"));
             }
         }
+        serde_json::Value::Object(m) => {
+            xml.push_str(&format!("{indent}<{tag}>\n"));
+            for (k, v) in m {
+                json_value_to_xml(v, k, xml, depth + 1);
+            }
+            xml.push_str(&format!("{indent}</{tag}>\n"));
+        }
+        serde_json::Value::Null => {}
         _ => {
             let text = value
                 .as_str()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| value.to_string());
-            xml.push_str(&format!("{}{}\n", indent, escape_xml(&text)));
+            xml.push_str(&format!("{indent}<{tag}>{}</{tag}>\n", escape_xml(&text),));
         }
     }
 }
