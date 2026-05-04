@@ -116,15 +116,14 @@ pub async fn subscribe_queue(
     Ok((StatusCode::CREATED, Json(binding)))
 }
 
-/// DELETE /v1/topics/{pattern}/subscriptions/{queue_name}
-/// Removes an SQS queue subscription by name. Returns 404 if not found.
+/// DELETE /v1/topics/{pattern}/subscriptions/{id}
+/// Removes a subscription by id. Returns 404 if not found.
 pub async fn unsubscribe_queue(
     State(state): State<AppState>,
-    Path((pattern, queue_name)): Path<(String, String)>,
+    Path((pattern, id)): Path<(String, i64)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // REST API subscriptions store endpoint as "sqs://{queue_name}".
-    let endpoint = format!("sqs://{queue_name}");
-    topic::unsubscribe(&state.pool, &pattern, &endpoint).await?;
+    let _ = pattern; // id is globally unique; pattern is for URL structure
+    topic::unsubscribe_by_id(&state.pool, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -1396,7 +1396,9 @@ BEGIN
     PERFORM queue._validate_batch_params(msgs, headers);
     FOR b IN
         SELECT DISTINCT tb.queue_name FROM queue.topic_subscriptions tb
-        WHERE routing_key ~ tb.compiled_regex ORDER BY tb.queue_name
+        WHERE routing_key ~ tb.compiled_regex
+          AND tb.queue_name IS NOT NULL
+        ORDER BY tb.queue_name
     LOOP
         RETURN QUERY
         SELECT b.queue_name, batch_result.msg_id

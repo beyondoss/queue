@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue.http_deliveries SET attempt = max_attempts WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b9fc7a252cb8e988304df8fcef9530c3a018d252cf49939d97fa075e60b3ffd1"
+}

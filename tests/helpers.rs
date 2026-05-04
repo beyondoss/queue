@@ -176,6 +176,22 @@ impl TestClient {
         )
         .await
     }
+
+    /// Send a request using the SNS JSON wire protocol.
+    pub async fn sns<B: serde::Serialize>(&self, action: &str, body: &B) -> TestResponse {
+        TestResponse::from(
+            self.inner
+                .post(&self.base_url)
+                .header(reqwest::header::AUTHORIZATION, "Bearer test")
+                .header("content-type", "application/x-amz-json-1.0")
+                .header("x-amz-target", format!("AmazonSNS.{action}"))
+                .json(body)
+                .send()
+                .await
+                .expect("SNS action"),
+        )
+        .await
+    }
 }
 
 // ── TestWebhook ───────────────────────────────────────────────────────────────
@@ -207,7 +223,7 @@ impl TestWebhook {
         let n = notify.clone();
         tokio::spawn(async move {
             let app = axum::Router::new().route(
-                "/{*path}",
+                "/",
                 axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
                     let r = r.clone();
                     let n = n.clone();

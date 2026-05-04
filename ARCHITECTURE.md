@@ -155,9 +155,9 @@ SNS supports the same two wire formats as SQS (JSON and Query/form-encoded). Res
 
 **Topics are implicit.** `CreateTopic` returns an ARN synthesized from the name (`arn:aws:sns:us-east-1:000000000000:{name}`) but stores nothing. `ListTopics` derives topic names from distinct patterns in `queue.topic_subscriptions`. `DeleteTopic` deletes all subscriptions for that pattern. This means a topic with zero subscriptions won't appear in `ListTopics` — the edge case is not worth an extra table.
 
-**Subscribe protocol restriction:** only `Protocol=sqs` is accepted. The endpoint must be a queue URL; the queue name is extracted from the last path segment.
+**Subscribe protocols:** `sqs`, `http`, and `https` are all accepted. For SQS subscriptions, the endpoint must be a queue URL and the queue name is extracted from the last path segment. For HTTP/HTTPS, the endpoint URL is stored directly and the delivery worker POSTs to it.
 
-**Publish delivery:** the message is wrapped in a standard SNS notification envelope before being stored in the target queues. When a consumer calls SQS `ReceiveMessage`, the `Body` field is the JSON string of the envelope — the same format real SNS delivers:
+**Publish delivery:** the message is wrapped in a standard SNS notification envelope. For SQS subscriptions the envelope is stored as the message `Body`. For HTTP/HTTPS subscriptions, `raw_delivery` controls whether the raw payload or the envelope is POSTed. `RawMessageDelivery=true` (via `SetSubscriptionAttributes`) posts the raw payload.
 
 ```json
 {
@@ -166,25 +166,30 @@ SNS supports the same two wire formats as SQS (JSON and Query/form-encoded). Res
   "TopicArn": "arn:aws:sns:us-east-1:000000000000:my-topic",
   "Message": "the original Publish body",
   "Timestamp": "2024-01-01T00:00:00.000Z",
-  "SignatureVersion": "1",
-  "Signature": "EXAMPLE",
-  ...
+  "SignatureVersion": "2",
+  "Signature": "<RSA-SHA256 base64>",
+  "SigningCertURL": "http://{BASE_URL}/SimpleNotificationService.pem"
 }
 ```
 
-**Subscription ARNs** encode `(topic, queue)` as `arn:aws:sns:us-east-1:000000000000:{topic}:{queue}`. Stable across restarts; `Unsubscribe` parses them back.
+The signature follows the SNS v2 spec: alphabetically sorted field name/value pairs each terminated by `\n`, signed with an RSA-2048 key generated at startup. The corresponding public certificate is served at `GET /SimpleNotificationService.pem` and `GET /v1/cert`.
+
+**Subscription ARNs** encode `(topic, id)` as `arn:aws:sns:us-east-1:000000000000:{topic}:{id}` for HTTP/HTTPS subscriptions and `(topic, queue_name)` for SQS. `Unsubscribe` parses the key: numeric → `unsubscribe_by_id`; non-numeric → treat as queue name for SQS.
 
 **ARN region and account** are hardcoded to `us-east-1` / `000000000000`, matching the SQS layer. Clients round-trip ARNs; the values are never authenticated.
 
 ### Topic fanout
 
-`POST /v1/topics/{routing_key}` calls `queue.send_topic(routing_key, msg, headers, delay)`, which:
+`POST /v1/topics/{routing_key}` fans out to both SQS queues and HTTP endpoints:
 
-1. Validates the routing key (`[a-zA-Z0-9._-]+`, no leading/trailing/consecutive dots, max 255 chars).
-2. Queries `queue.topic_subscriptions` for all bindings where `routing_key ~ compiled_regex`.
-3. Calls `queue.send` once per matching queue. Returns the count of matched queues.
+1. `queue.send_topic(routing_key, msg, headers, delay)` — fan-out to SQS subscriptions only. Validates the routing key, queries `queue.topic_subscriptions` where `routing_key ~ compiled_regex AND queue_name IS NOT NULL`, calls `queue.send` once per match.
+2. `queue.queue_http_deliveries(routing_key, raw_msg, envelope_msg)` — inserts one row into `queue.http_deliveries` per matching HTTP/HTTPS subscription. `raw_delivery=true` stores `raw_msg`; `false` stores `envelope_msg`.
 
-Bindings are stored as `(pattern, queue_name)` with a stored-generated `compiled_regex` column. Pattern wildcards:
+The delivery worker (`src/ops/delivery.rs`) polls `http_deliveries` in a background task. Each poll opens a transaction, fetches pending rows with `FOR UPDATE SKIP LOCKED`, POSTs to each endpoint, and deletes on success or updates `attempt` / `next_attempt_at` on failure. Backoff schedule: 10s → 30s → 60s → 300s. Exhausted rows (`attempt >= max_attempts`) stay for inspection; no automatic reaping.
+
+**REST API subscriptions** default to `raw_delivery=true` (raw payload). Opt in to the SNS envelope with `"envelope": true` in the subscribe body. **SNS wire protocol subscriptions** default to `raw_delivery=false` (envelope); set `RawMessageDelivery=true` via `SetSubscriptionAttributes` to switch.
+
+Bindings are stored in `queue.topic_subscriptions` with columns `protocol`, `endpoint`, `queue_name` (nullable), `raw_delivery`, and a stored-generated `compiled_regex`. Pattern wildcards:
 
 - `*` matches a single segment (no dots) → compiled to `[^.]+`
 - `#` matches zero or more segments → compiled to `.*`
@@ -248,58 +253,66 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | `OTLP_ENABLED`               | `false`                 | Enable OpenTelemetry OTLP trace export over gRPC.                                                                 |
 | `OTLP_ENDPOINT`              | `http://localhost:4317` | gRPC OTLP collector. Used when `OTLP_ENABLED=true`.                                                               |
 | `BASE_URL`                   | `http://{ADDRESS}`      | Base URL for SQS queue URLs returned to clients (`{BASE_URL}/000000000000/{name}`). Override when behind a proxy. |
+| `HTTP_DELIVERY_ENABLED`      | `true`                  | Enable the background HTTP/HTTPS delivery worker.                                                                 |
+| `HTTP_DELIVERY_POLL_MS`      | `1000`                  | Delivery worker poll interval (ms). Lower values increase responsiveness at the cost of idle DB load.             |
+| `HTTP_DELIVERY_TIMEOUT_SECS` | `5`                     | Per-request timeout for outbound webhook POSTs.                                                                   |
 
 ---
 
 ## Failure Modes
 
-| Failure                                     | What Actually Happens                                                                                 | Recovery                                                                                       |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Consumer crashes before deleting message    | Message stays in `queue.q_{name}` with vt in the future. When vt expires, next read returns it again. | None needed — automatic re-delivery. `read_ct` increments on each delivery.                    |
-| PostgreSQL connection pool exhausted        | sqlx returns `PoolTimedOut`; handler returns 500 with `{"error": "Database error"}`.                  | Client retries. Pool clears as in-flight connections finish.                                   |
-| PostgreSQL unavailable at startup           | `db::connect` fails; process exits non-zero.                                                          | Restart the process once PostgreSQL is available.                                              |
-| PostgreSQL unavailable mid-flight           | sqlx returns an error; handler returns 500.                                                           | Client retries. Pool reconnects on next use.                                                   |
-| Extension not in `shared_preload_libraries` | `WaiterRegistry` not initialized; `receive` falls back to `WL_TIMEOUT` polling at `poll_interval_ms`. | Functional but higher read latency. Fix by adding the extension to `shared_preload_libraries`. |
-| Postmaster death during `WaitLatch`         | `WL_EXIT_ON_PM_DEATH` triggers; backend exits.                                                        | PostgreSQL restarts the backend on next connection.                                            |
-| Queue name injection attempt                | `validate_name` in pgrx raises PostgreSQL ERROR (`pgrx::error!()`).                                   | Caught by the `match $handler(…).await` macro arm; returned as 400/InternalError to client.    |
-| Mismatched headers array in `send_batch`    | pgrx raises PostgreSQL ERROR comparing array lengths before insert.                                   | Client receives 500. No partial insert.                                                        |
+| Failure                                     | What Actually Happens                                                                                         | Recovery                                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Consumer crashes before deleting message    | Message stays in `queue.q_{name}` with vt in the future. When vt expires, next read returns it again.         | None needed — automatic re-delivery. `read_ct` increments on each delivery.                                           |
+| PostgreSQL connection pool exhausted        | sqlx returns `PoolTimedOut`; handler returns 500 with `{"error": "Database error"}`.                          | Client retries. Pool clears as in-flight connections finish.                                                          |
+| PostgreSQL unavailable at startup           | `db::connect` fails; process exits non-zero.                                                                  | Restart the process once PostgreSQL is available.                                                                     |
+| PostgreSQL unavailable mid-flight           | sqlx returns an error; handler returns 500.                                                                   | Client retries. Pool reconnects on next use.                                                                          |
+| Extension not in `shared_preload_libraries` | `WaiterRegistry` not initialized; `receive` falls back to `WL_TIMEOUT` polling at `poll_interval_ms`.         | Functional but higher read latency. Fix by adding the extension to `shared_preload_libraries`.                        |
+| Postmaster death during `WaitLatch`         | `WL_EXIT_ON_PM_DEATH` triggers; backend exits.                                                                | PostgreSQL restarts the backend on next connection.                                                                   |
+| Queue name injection attempt                | `validate_name` in pgrx raises PostgreSQL ERROR (`pgrx::error!()`).                                           | Caught by the `match $handler(…).await` macro arm; returned as 400/InternalError to client.                           |
+| Mismatched headers array in `send_batch`    | pgrx raises PostgreSQL ERROR comparing array lengths before insert.                                           | Client receives 500. No partial insert.                                                                               |
+| HTTP endpoint returns non-2xx               | Delivery worker increments `attempt`, sets `next_attempt_at = now + backoff`. Row stays in `http_deliveries`. | Worker retries after backoff (10s/30s/60s/300s). After `max_attempts` (5), row stays as dead-letter for inspection.   |
+| HTTP endpoint unreachable / timeout         | Same as non-2xx: recorded as failure, retried with backoff.                                                   | Same retry path. `last_error` column stores the error string.                                                         |
+| Delivery worker restart mid-batch           | Transaction rolls back; rows revert to pending state (next_attempt_at unchanged).                             | Worker picks them up again on next poll. `FOR UPDATE SKIP LOCKED` prevents double-delivery across concurrent workers. |
 
 ---
 
 ## File Map
 
-| Path                                    | What It Does                                                                                                                                                                                                       |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/main.rs`                           | Binary entry point; delegates to `beyond_queue::run()`. Sets jemalloc as allocator.                                                                                                                                |
-| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SNS/SQS gateway at `POST /` + SQS path handler + `/healthz`. Attaches `require_auth` to all except healthz.                                                                 |
-| `src/config.rs`                         | `Config` struct parsed from CLI args / env vars via clap.                                                                                                                                                          |
-| `src/db.rs`                             | Creates `PgPool` with `max_connections`.                                                                                                                                                                           |
-| `src/middleware/auth.rs`                | Checks for presence of `Authorization` header; rejects with 403 if absent.                                                                                                                                         |
-| `src/ops/send.rs`                       | `queue.send`, `queue.send_batch`, `queue.send_fifo` — single/batch/FIFO inserts.                                                                                                                                   |
-| `src/ops/receive.rs`                    | `queue.receive`, `queue.receive_fifo` — long-poll reads.                                                                                                                                                           |
-| `src/ops/delete.rs`                     | `queue.delete` — single and batch deletes.                                                                                                                                                                         |
-| `src/ops/visibility.rs`                 | `queue.change_visibility` — change visibility timeout by msg_id.                                                                                                                                                   |
-| `src/ops/queue_admin.rs`                | `queue.create`, `queue.create_fifo`, `queue.delete_queue`, `queue.list_queues`, `queue.metrics`, `queue.purge_queue`.                                                                                              |
-| `src/ops/topic.rs`                      | `queue.send_topic` fan-out; subscribe/unsubscribe/list ops; SNS-specific list/delete helpers.                                                                                                                      |
-| `src/routes/queues.rs`                  | `GET/POST /v1/queues`, `GET/DELETE /v1/queues/{name}`, `POST /v1/queues/{name}/purge`.                                                                                                                             |
-| `src/routes/messages.rs`                | `GET/POST/DELETE /v1/queues/{name}/messages`, `DELETE/PATCH /v1/queues/{name}/messages/{id}`.                                                                                                                      |
-| `src/routes/topics.rs`                  | `POST /v1/topics/{routing_key}`, subscription CRUD endpoints.                                                                                                                                                      |
-| `src/sns/mod.rs`                        | SNS service handler. Protocol detection (JSON/Query), action dispatch.                                                                                                                                             |
-| `src/sns/context.rs`                    | `SnsContext` — per-request protocol + request ID + action. ARN helpers. Serializes responses as SNS-shaped JSON or XML.                                                                                            |
-| `src/sns/types.rs`                      | Request/response structs for all SNS actions.                                                                                                                                                                      |
-| `src/sns/error.rs`                      | `SnsError` + `SnsErrorCode` — serializes to JSON or XML.                                                                                                                                                           |
-| `src/sns/actions/`                      | One file per SNS action. Each delegates to `ops/`.                                                                                                                                                                 |
-| `src/sqs/mod.rs`                        | Protocol detection, action dispatch macro. Path-based route handler + `handle_service_request` called from gateway.                                                                                                |
-| `src/sqs/context.rs`                    | `SqsContext` — per-request protocol + request ID. Serializes responses as JSON or XML.                                                                                                                             |
-| `src/sqs/receipt.rs`                    | `encode`/`decode` for receipt handles: `base64url("{queue_name}\x00{msg_id}")`.                                                                                                                                    |
-| `src/sqs/types.rs`                      | Request/response structs for all SQS actions.                                                                                                                                                                      |
-| `src/sqs/error.rs`                      | `SqsError` + `SqsErrorCode` — serializes to JSON or XML depending on protocol.                                                                                                                                     |
-| `src/sqs/util.rs`                       | `queue_name_from_url`, `md5_of`, `message_attributes_to_headers`.                                                                                                                                                  |
-| `src/sqs/actions/`                      | One file per SQS action. Each delegates to `ops/`.                                                                                                                                                                 |
-| `beyond-queue-extension/src/lib.rs`     | pgrx module root. Installs shared-memory hooks in `_PG_init`. Loads `schema.sql`.                                                                                                                                  |
-| `beyond-queue-extension/src/queue.rs`   | Hot-path pgrx C functions: `send`, `send_batch` (and FIFO variants), `receive`, `receive_fifo`, `delete`, `archive`, `pop`, `change_visibility`.                                                                   |
-| `beyond-queue-extension/src/waiter.rs`  | `WaiterRegistry` in shared memory. FNV-1a hash, 256 buckets, 4096 slots. `WaiterGuard` RAII, `notify_waiters`, `register_notify_after_commit`.                                                                     |
-| `beyond-queue-extension/sql/schema.sql` | DDL for `queue.meta`, `queue.q_{name}`, `queue.a_{name}`, `queue.topic_subscriptions`, `queue.notify_insert_throttle`. PL/pgSQL functions: `receive_fifo`, FIFO grouped reads, topic routing, notification system. |
+| Path                                    | What It Does                                                                                                                                                                                                                                                         |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main.rs`                           | Binary entry point; delegates to `beyond_queue::run()`. Sets jemalloc as allocator.                                                                                                                                                                                  |
+| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SNS/SQS gateway at `POST /` + SQS path handler + `/healthz`. Attaches `require_auth` to all except healthz.                                                                                                                   |
+| `src/config.rs`                         | `Config` struct parsed from CLI args / env vars via clap.                                                                                                                                                                                                            |
+| `src/db.rs`                             | Creates `PgPool` with `max_connections`.                                                                                                                                                                                                                             |
+| `src/middleware/auth.rs`                | Checks for presence of `Authorization` header; rejects with 403 if absent.                                                                                                                                                                                           |
+| `src/ops/send.rs`                       | `queue.send`, `queue.send_batch`, `queue.send_fifo` — single/batch/FIFO inserts.                                                                                                                                                                                     |
+| `src/ops/receive.rs`                    | `queue.receive`, `queue.receive_fifo` — long-poll reads.                                                                                                                                                                                                             |
+| `src/ops/delete.rs`                     | `queue.delete` — single and batch deletes.                                                                                                                                                                                                                           |
+| `src/ops/visibility.rs`                 | `queue.change_visibility` — change visibility timeout by msg_id.                                                                                                                                                                                                     |
+| `src/ops/queue_admin.rs`                | `queue.create`, `queue.create_fifo`, `queue.delete_queue`, `queue.list_queues`, `queue.metrics`, `queue.purge_queue`.                                                                                                                                                |
+| `src/ops/topic.rs`                      | `queue.send_topic` fan-out; `queue.queue_http_deliveries`; subscribe/unsubscribe/list ops; SNS-specific list/delete helpers.                                                                                                                                         |
+| `src/ops/delivery.rs`                   | Background HTTP delivery worker. Polls `queue.http_deliveries`, POSTs to endpoints, retries with exponential backoff.                                                                                                                                                |
+| `src/signing.rs`                        | RSA-2048 keypair generated at startup. `sign_notification()` produces SNS v2 base64 signatures. Self-signed X.509 cert served at `/SimpleNotificationService.pem`.                                                                                                   |
+| `src/routes/queues.rs`                  | `GET/POST /v1/queues`, `GET/DELETE /v1/queues/{name}`, `POST /v1/queues/{name}/purge`.                                                                                                                                                                               |
+| `src/routes/messages.rs`                | `GET/POST/DELETE /v1/queues/{name}/messages`, `DELETE/PATCH /v1/queues/{name}/messages/{id}`.                                                                                                                                                                        |
+| `src/routes/topics.rs`                  | `POST /v1/topics/{routing_key}`, subscription CRUD endpoints.                                                                                                                                                                                                        |
+| `src/sns/mod.rs`                        | SNS service handler. Protocol detection (JSON/Query), action dispatch.                                                                                                                                                                                               |
+| `src/sns/context.rs`                    | `SnsContext` — per-request protocol + request ID + action. ARN helpers. Serializes responses as SNS-shaped JSON or XML.                                                                                                                                              |
+| `src/sns/types.rs`                      | Request/response structs for all SNS actions.                                                                                                                                                                                                                        |
+| `src/sns/error.rs`                      | `SnsError` + `SnsErrorCode` — serializes to JSON or XML.                                                                                                                                                                                                             |
+| `src/sns/actions/`                      | One file per SNS action. Each delegates to `ops/`.                                                                                                                                                                                                                   |
+| `src/sqs/mod.rs`                        | Protocol detection, action dispatch macro. Path-based route handler + `handle_service_request` called from gateway.                                                                                                                                                  |
+| `src/sqs/context.rs`                    | `SqsContext` — per-request protocol + request ID. Serializes responses as JSON or XML.                                                                                                                                                                               |
+| `src/sqs/receipt.rs`                    | `encode`/`decode` for receipt handles: `base64url("{queue_name}\x00{msg_id}")`.                                                                                                                                                                                      |
+| `src/sqs/types.rs`                      | Request/response structs for all SQS actions.                                                                                                                                                                                                                        |
+| `src/sqs/error.rs`                      | `SqsError` + `SqsErrorCode` — serializes to JSON or XML depending on protocol.                                                                                                                                                                                       |
+| `src/sqs/util.rs`                       | `queue_name_from_url`, `md5_of`, `message_attributes_to_headers`.                                                                                                                                                                                                    |
+| `src/sqs/actions/`                      | One file per SQS action. Each delegates to `ops/`.                                                                                                                                                                                                                   |
+| `beyond-queue-extension/src/lib.rs`     | pgrx module root. Installs shared-memory hooks in `_PG_init`. Loads `schema.sql`.                                                                                                                                                                                    |
+| `beyond-queue-extension/src/queue.rs`   | Hot-path pgrx C functions: `send`, `send_batch` (and FIFO variants), `receive`, `receive_fifo`, `delete`, `archive`, `pop`, `change_visibility`.                                                                                                                     |
+| `beyond-queue-extension/src/waiter.rs`  | `WaiterRegistry` in shared memory. FNV-1a hash, 256 buckets, 4096 slots. `WaiterGuard` RAII, `notify_waiters`, `register_notify_after_commit`.                                                                                                                       |
+| `beyond-queue-extension/sql/schema.sql` | DDL for `queue.meta`, `queue.q_{name}`, `queue.a_{name}`, `queue.topic_subscriptions`, `queue.http_deliveries`, `queue.notify_insert_throttle`. PL/pgSQL functions: `receive_fifo`, FIFO grouped reads, topic routing, `queue_http_deliveries`, notification system. |
 
 ---
 
@@ -307,19 +320,23 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 
 ### Native REST API (`/v1/`)
 
-| Method   | Path                              | Operation                                                                                                                     |
-| -------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/v1/queues`                      | Create queue. Body: `{"name": "...", "fifo": false}`. Returns 201.                                                            |
-| `GET`    | `/v1/queues`                      | List all queues. Returns array of `{name, is_partitioned, is_unlogged, created_at}`.                                          |
-| `GET`    | `/v1/queues/{name}`               | Queue metrics: `{queue_length, newest_msg_age_sec, oldest_msg_age_sec, total_messages, scrape_time}`.                         |
-| `DELETE` | `/v1/queues/{name}`               | Delete queue. Returns 204 if deleted, 404 if not found.                                                                       |
-| `POST`   | `/v1/queues/{name}/purge`         | Delete all messages. Returns `{"deleted": N}`.                                                                                |
-| `POST`   | `/v1/queues/{name}/messages`      | Send single `{message, headers?, delay?}` or batch `[{message, headers?, delay?, group_id?}]`. Returns 201 `{id}` or `{ids}`. |
-| `GET`    | `/v1/queues/{name}/messages`      | Receive. Query params: `max` (default 1), `vt` (default 30), `wait` (default 0), `fifo` (default false). Returns array.       |
-| `DELETE` | `/v1/queues/{name}/messages`      | Batch delete. Body: `{"ids": [1,2,3]}`. Returns `{"deleted": [1,2,3]}`.                                                       |
-| `DELETE` | `/v1/queues/{name}/messages/{id}` | Delete single. Returns 204 or 404.                                                                                            |
-| `PATCH`  | `/v1/queues/{name}/messages/{id}` | Change visibility. Body: `{"vt": 60}`. Returns `{"id": N, "visible_at": "..."}`.                                              |
-| `POST`   | `/v1/topics/{routing_key}`        | Fan-out. Body: `{message, headers?, delay?}`. Returns 201 `{"queues_matched": N}`.                                            |
+| Method   | Path                                      | Operation                                                                                                                             |
+| -------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/v1/queues`                              | Create queue. Body: `{"name": "...", "fifo": false}`. Returns 201.                                                                    |
+| `GET`    | `/v1/queues`                              | List all queues. Returns array of `{name, is_partitioned, is_unlogged, created_at}`.                                                  |
+| `GET`    | `/v1/queues/{name}`                       | Queue metrics: `{queue_length, newest_msg_age_sec, oldest_msg_age_sec, total_messages, scrape_time}`.                                 |
+| `DELETE` | `/v1/queues/{name}`                       | Delete queue. Returns 204 if deleted, 404 if not found.                                                                               |
+| `POST`   | `/v1/queues/{name}/purge`                 | Delete all messages. Returns `{"deleted": N}`.                                                                                        |
+| `POST`   | `/v1/queues/{name}/messages`              | Send single `{message, headers?, delay?}` or batch `[{message, headers?, delay?, group_id?}]`. Returns 201 `{id}` or `{ids}`.         |
+| `GET`    | `/v1/queues/{name}/messages`              | Receive. Query params: `max` (default 1), `vt` (default 30), `wait` (default 0), `fifo` (default false). Returns array.               |
+| `DELETE` | `/v1/queues/{name}/messages`              | Batch delete. Body: `{"ids": [1,2,3]}`. Returns `{"deleted": [1,2,3]}`.                                                               |
+| `DELETE` | `/v1/queues/{name}/messages/{id}`         | Delete single. Returns 204 or 404.                                                                                                    |
+| `PATCH`  | `/v1/queues/{name}/messages/{id}`         | Change visibility. Body: `{"vt": 60}`. Returns `{"id": N, "visible_at": "..."}`.                                                      |
+| `POST`   | `/v1/topics/{routing_key}`                | Fan-out to SQS queues + HTTP endpoints. Body: `{message, headers?, delay?}`. Returns 201 `{"queues_matched": N, "messages": [...]}`.  |
+| `POST`   | `/v1/topics/{pattern}/subscriptions`      | Subscribe SQS queue (`{"queue_name":"..."}`) or HTTP endpoint (`{"protocol":"http","endpoint":"...","envelope":false}`). Returns 201. |
+| `GET`    | `/v1/topics/{pattern}/subscriptions`      | List subscriptions for a pattern.                                                                                                     |
+| `DELETE` | `/v1/topics/{pattern}/subscriptions/{id}` | Unsubscribe by id. Returns 204 or 404.                                                                                                |
+| `GET`    | `/SimpleNotificationService.pem`          | PEM-encoded public certificate for SNS signature verification.                                                                        |
 
 ### SQS-compatible API
 

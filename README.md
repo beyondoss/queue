@@ -1,10 +1,10 @@
 # beyond-queue
 
-Drop-in SQS replacement backed by PostgreSQL. Runs inside your network; no external dependencies.
+Drop-in SQS + SNS replacement backed by PostgreSQL. Runs inside your network; no external dependencies.
 
-Accepts both SQS wire protocols (JSON and Query/form-encoded) and a native REST API. Your existing SQS SDK works unchanged — point it at this instead.
+Accepts both SQS and SNS wire protocols (JSON and Query/form-encoded) and a native REST API. Your existing SQS/SNS SDK works unchanged — point it at this instead.
 
-Built on [pgmq](https://github.com/tembo-io/pgmq). The schema, table layout, and core SQL are pgmq's. We replaced the hot paths with a pgrx Rust extension: direct heap inserts, WaitLatch-based long-polling, and push notification on commit via `XactCallback`. The REST API and SQS protocol layers are new.
+Built on [pgmq](https://github.com/tembo-io/pgmq). The schema, table layout, and core SQL are pgmq's. We replaced the hot paths with a pgrx Rust extension: direct heap inserts, WaitLatch-based long-polling, and push notification on commit via `XactCallback`. The REST API, SQS protocol layer, SNS protocol layer, and HTTP delivery worker are new.
 
 ## Quick Start
 
@@ -30,13 +30,44 @@ curl -X POST http://localhost:4566/v1/queues/jobs/messages -d '{"message":{"job"
 curl "http://localhost:4566/v1/queues/jobs/messages?wait=5&vt=30"
 ```
 
+Fan out to queues and HTTP webhooks via topics:
+
+```sh
+# Bind a queue to a pattern (SQS fan-out)
+curl -X POST http://localhost:4566/v1/topics/orders.*/subscriptions \
+  -d '{"queue_name":"jobs"}'
+
+# Bind an HTTP endpoint (webhook delivery, raw payload by default)
+curl -X POST http://localhost:4566/v1/topics/orders.*/subscriptions \
+  -d '{"protocol":"https","endpoint":"https://example.com/hooks/orders"}'
+
+# Publish — both subscribers receive the message
+curl -X POST http://localhost:4566/v1/topics/orders.placed \
+  -d '{"message":{"order_id":42}}'
+```
+
+Or use the SNS wire protocol with your existing SDK:
+
+```python
+import boto3
+sns = boto3.client("sns", endpoint_url="http://localhost:4566")
+topic = sns.create_topic(Name="orders.*")["TopicArn"]
+sns.subscribe(TopicArn=topic, Protocol="https", Endpoint="https://example.com/hooks/orders")
+sns.publish(TopicArn="arn:aws:sns:us-east-1:000000000000:orders.placed",
+            Message='{"order_id": 42}')
+```
+
 ## What it does
 
 - **Standard queues** — send, receive with visibility timeout, delete, batch operations
 - **FIFO queues** — per-group ordering, group locking, deduplication
 - **Long polling** — `?wait=N` blocks up to N seconds; woken immediately when a message arrives (no busy polling)
 - **Async commit** — opt out of WAL fsync per-send for higher throughput when durability can be relaxed
+- **Topic fan-out** — publish to a routing key, fan out to any number of bound queues or HTTP endpoints; wildcard patterns (`orders.*`, `events.#`)
+- **HTTP/HTTPS webhook delivery** — push to subscriber endpoints with automatic retry and exponential backoff (10s → 30s → 60s → 5m); dead-lettered rows retained for inspection
+- **SNS-compatible envelope** — outbound webhooks carry a signed SNS notification envelope (`Type`, `MessageId`, `TopicArn`, `Signature`, `SignatureVersion: 2`) for compatibility with SNS consumers; opt out per-subscription for raw payload delivery
 - **SQS compatibility** — CreateQueue, SendMessage, ReceiveMessage, DeleteMessage, ChangeMessageVisibility, and more, in both JSON and Query protocols
+- **SNS compatibility** — CreateTopic, Subscribe (`sqs`/`http`/`https`), Publish, ListSubscriptions, Unsubscribe, GetSubscriptionAttributes, in both JSON and Query protocols
 
 ## Benchmarks
 

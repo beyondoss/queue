@@ -15,6 +15,11 @@ pub struct TestServer {
 }
 
 pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestServer> {
+    // Initialize tracing for tests — ignore errors if already initialized.
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::ERROR)
+        .try_init();
+
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 

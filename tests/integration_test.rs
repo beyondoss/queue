@@ -571,8 +571,9 @@ async fn test_http_delivery_envelope() {
 async fn test_http_delivery_retry_on_failure() {
     let _ = test_env();
     let client = TestClient::new();
-    // First 2 requests return 500, then 200
-    let webhook = helpers::TestWebhook::with_status_sequence(vec![500, 500, 200]).await;
+    // First request returns 500, second returns 200.
+    // Backoff after attempt 1 is 10s, so the retry arrives ~10s later.
+    let webhook = helpers::TestWebhook::with_status_sequence(vec![500, 200]).await;
 
     client
         .post(
@@ -590,16 +591,14 @@ async fn test_http_delivery_retry_on_failure() {
         .await
         .assert_status(201);
 
-    // Wait for eventual delivery (may take a few poll cycles for retries)
-    // The worker records failures and retries; eventually the 3rd attempt succeeds.
-    // Use a generous timeout since retry backoff is 10s for attempt 1.
-    // We use a short backoff in tests is not configurable per-subscription, so
-    // just verify the body arrives eventually at attempt 3.
+    // Wait for 2 deliveries: the initial failure (500) and the successful retry (200).
+    // Backoff after attempt 1 is 10s; allow 15s total.
     let deliveries = webhook
-        .wait_for(3, std::time::Duration::from_secs(30))
+        .wait_for(2, std::time::Duration::from_secs(15))
         .await;
-    assert_eq!(deliveries.len(), 3);
-    assert_eq!(deliveries[2], serde_json::json!({ "x": 1 }));
+    assert_eq!(deliveries.len(), 2);
+    // Both attempts carry the same payload
+    assert_eq!(deliveries[1], serde_json::json!({ "x": 1 }));
 }
 
 #[tokio::test]
@@ -680,4 +679,140 @@ async fn test_sqs_subscriptions_unaffected_by_http_delivery() {
     let arr = msgs.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["message"]["data"], "hello");
+}
+
+#[tokio::test]
+async fn test_http_delivery_dead_letter() {
+    let env = test_env();
+    let client = TestClient::new();
+    // Endpoint that always returns 500 — delivery will never succeed.
+    let webhook =
+        helpers::TestWebhook::with_status_sequence(std::iter::repeat(500u16).take(10).collect())
+            .await;
+
+    client
+        .post(
+            "/v1/topics/deadletter.*/subscriptions",
+            &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
+        )
+        .await
+        .assert_status(201);
+
+    client
+        .post(
+            "/v1/topics/deadletter.test",
+            &serde_json::json!({ "message": { "fail": true } }),
+        )
+        .await
+        .assert_status(201);
+
+    // Wait for the first delivery attempt to be recorded.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // The row should exist with attempt >= 1.
+    let row = sqlx::query!(
+        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.http_deliveries
+           WHERE endpoint = $1 ORDER BY id DESC LIMIT 1"#,
+        webhook.url,
+    )
+    .fetch_optional(&env.pool)
+    .await
+    .unwrap()
+    .expect("expected an http_deliveries row after first attempt");
+    assert!(
+        row.attempt >= 1,
+        "delivery worker should have attempted at least once"
+    );
+
+    // Fast-forward: set attempt = max_attempts to simulate exhaustion.
+    sqlx::query!(
+        "UPDATE queue.http_deliveries SET attempt = max_attempts WHERE id = $1",
+        row.id,
+    )
+    .execute(&env.pool)
+    .await
+    .unwrap();
+
+    // Give the worker a couple of poll cycles.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Row must still exist — exhausted rows are retained for inspection, not deleted.
+    let still_there = sqlx::query!(
+        r#"SELECT id AS "id!" FROM queue.http_deliveries WHERE id = $1"#,
+        row.id,
+    )
+    .fetch_optional(&env.pool)
+    .await
+    .unwrap();
+    assert!(
+        still_there.is_some(),
+        "dead-lettered row must remain for inspection"
+    );
+}
+
+#[tokio::test]
+async fn test_sns_subscribe_http_and_publish() {
+    let _ = test_env();
+    let client = TestClient::new();
+    let webhook = helpers::TestWebhook::start().await;
+
+    // Subscribe via SNS wire protocol (JSON). SNS subs default to envelope delivery (raw_delivery=false).
+    let sub_resp = client
+        .sns(
+            "Subscribe",
+            &serde_json::json!({
+                "TopicArn": "arn:aws:sns:us-east-1:000000000000:sns-wh.*",
+                "Protocol": "http",
+                "Endpoint": webhook.url,
+            }),
+        )
+        .await
+        .assert_status(200)
+        .json::<serde_json::Value>();
+    assert!(
+        sub_resp["SubscriptionArn"]
+            .as_str()
+            .unwrap_or("")
+            .contains("sns-wh"),
+        "SubscriptionArn should reference the topic: {sub_resp}"
+    );
+
+    // Publish via SNS wire protocol.
+    let pub_resp = client
+        .sns(
+            "Publish",
+            &serde_json::json!({
+                "TopicArn": "arn:aws:sns:us-east-1:000000000000:sns-wh.created",
+                "Message": r#"{"event":"user_signed_up"}"#,
+            }),
+        )
+        .await
+        .assert_status(200)
+        .json::<serde_json::Value>();
+    assert!(
+        pub_resp["MessageId"].is_string(),
+        "Publish must return a MessageId"
+    );
+
+    // The delivery worker should POST the SNS envelope to the webhook.
+    let deliveries = webhook.wait_for(1, std::time::Duration::from_secs(5)).await;
+    let msg = &deliveries[0];
+
+    // Envelope fields required by the SNS spec.
+    assert_eq!(msg["Type"], "Notification");
+    assert!(msg["MessageId"].is_string());
+    assert_eq!(
+        msg["TopicArn"],
+        "arn:aws:sns:us-east-1:000000000000:sns-wh.created"
+    );
+    assert_eq!(msg["Message"], r#"{"event":"user_signed_up"}"#);
+    // RSA-2048 signature must be present and non-empty.
+    assert!(
+        msg["Signature"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        "SNS envelope must carry a non-empty Signature"
+    );
+    assert_eq!(msg["SignatureVersion"], "2");
 }

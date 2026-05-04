@@ -35,7 +35,7 @@ DB="postgres://postgres:postgres@localhost:${PG_PORT}/postgres"
 docker exec bq-sqlx-prepare psql -U postgres -c "CREATE SCHEMA IF NOT EXISTS queue;"
 docker exec -i bq-sqlx-prepare psql -U postgres < beyond-queue-extension/sql/schema.sql
 docker exec -i bq-sqlx-prepare psql -U postgres < tests/fixtures/hot_paths.sql
-DATABASE_URL="$DB" cargo sqlx prepare --workspace
+DATABASE_URL="$DB" cargo sqlx prepare --workspace -- --tests
 docker stop bq-sqlx-prepare
 """
 
