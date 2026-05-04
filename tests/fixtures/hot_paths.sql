@@ -417,3 +417,26 @@ CREATE FUNCTION queue.send_fifo(
 ) RETURNS SETOF BIGINT LANGUAGE sql AS $$
     SELECT * FROM queue.send_fifo(queue_name, msg, message_group_id, deduplication_id, headers, delay);
 $$;
+
+-- send_topic (canonical): (TEXT, JSONB, JSONB, TIMESTAMPTZ) -> INTEGER
+-- PL/pgSQL stub matching the pgrx C function signature; used in tests without extension.
+CREATE FUNCTION queue.send_topic(
+    routing_key TEXT,
+    msg         JSONB,
+    headers     JSONB,
+    delay       TIMESTAMP WITH TIME ZONE
+) RETURNS INTEGER AS $$
+DECLARE
+    b             RECORD;
+    matched_count INTEGER := 0;
+BEGIN
+    FOR b IN
+        SELECT DISTINCT tb.queue_name FROM queue.topic_bindings tb
+        WHERE routing_key ~ tb.compiled_regex ORDER BY tb.queue_name
+    LOOP
+        PERFORM queue.send(b.queue_name, msg, headers, delay);
+        matched_count := matched_count + 1;
+    END LOOP;
+    RETURN matched_count;
+END;
+$$ LANGUAGE plpgsql;

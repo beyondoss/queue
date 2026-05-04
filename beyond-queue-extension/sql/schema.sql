@@ -1257,39 +1257,30 @@ BEGIN
 END;
 $$;
 
+-- Canonical send_topic(TEXT, JSONB, JSONB, TIMESTAMPTZ) is defined in hot_paths.sql
+-- (PL/pgSQL stub) and replaced by the pgrx C function via load_pgrx_extension.sql.
+-- These integer-delay wrappers delegate to it; PL/pgSQL resolves at call time.
+
 CREATE OR REPLACE FUNCTION queue.send_topic(routing_key text, msg jsonb, headers jsonb, delay integer)
 RETURNS integer LANGUAGE plpgsql VOLATILE AS $$
-DECLARE
-    b             RECORD;
-    matched_count integer := 0;
 BEGIN
-    PERFORM queue.validate_routing_key(routing_key);
-    IF msg IS NULL THEN RAISE EXCEPTION 'msg cannot be NULL'; END IF;
-    IF delay < 0 THEN RAISE EXCEPTION 'delay cannot be negative, got: %', delay; END IF;
-    FOR b IN
-        SELECT DISTINCT tb.queue_name
-        FROM queue.topic_bindings tb
-        WHERE routing_key ~ tb.compiled_regex
-        ORDER BY tb.queue_name
-    LOOP
-        PERFORM queue.send(b.queue_name, msg, headers, delay);
-        matched_count := matched_count + 1;
-    END LOOP;
-    RETURN matched_count;
+    RETURN queue.send_topic(routing_key, msg, headers,
+        clock_timestamp() + make_interval(secs => delay));
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION queue.send_topic(routing_key text, msg jsonb)
 RETURNS integer LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN queue.send_topic(routing_key, msg, NULL, 0);
+    RETURN queue.send_topic(routing_key, msg, NULL::jsonb, clock_timestamp());
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION queue.send_topic(routing_key text, msg jsonb, delay integer)
 RETURNS integer LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN queue.send_topic(routing_key, msg, NULL, delay);
+    RETURN queue.send_topic(routing_key, msg, NULL::jsonb,
+        clock_timestamp() + make_interval(secs => delay));
 END;
 $$;
 

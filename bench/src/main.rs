@@ -98,6 +98,9 @@ enum Command {
         /// If provided, runs read_grouped_rr on this separate database.
         #[arg(long)]
         oss_url: Option<String>,
+        /// Also run topic fanout scenarios (send_topic / send_batch_topic).
+        #[arg(long)]
+        topic: bool,
     },
     /// Print a diff table comparing two run-all JSON output files.
     Compare { before: String, after: String },
@@ -187,6 +190,7 @@ async fn main() -> Result<()> {
             profile,
             output,
             fifo,
+            topic,
             oss_url,
         } => {
             let oss_pool = if let Some(ref u) = oss_url {
@@ -198,7 +202,7 @@ async fn main() -> Result<()> {
                 None
             };
             let results =
-                run_all(&pool, oss_pool.as_ref(), profile, fifo, args.async_commit).await?;
+                run_all(&pool, oss_pool.as_ref(), profile, fifo, topic, args.async_commit).await?;
             print_results(&results);
             if let Some(path) = output {
                 std::fs::write(&path, serde_json::to_string_pretty(&results)?)?;
@@ -367,6 +371,154 @@ async fn fill_grouped_queue(pool: &PgPool, queue: &str, count: u64, groups: usiz
         inserted += n as u64;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// topic helpers
+// ---------------------------------------------------------------------------
+
+/// Create `n` queues named `{base}_0` .. `{base}_{n-1}` and bind them all to
+/// pattern `{base}.*`.  Both operations are idempotent, so calling this
+/// multiple times with increasing `n` is safe.
+async fn setup_topic_queues(pool: &PgPool, base: &str, n: usize) -> Result<()> {
+    let pattern = format!("{base}.*");
+    for i in 0..n {
+        let qname = format!("{base}_{i}");
+        ensure_queue(pool, &qname).await?;
+        sqlx::query(&format!("SELECT {}.bind_topic($1, $2)", sc()))
+            .bind(&pattern)
+            .bind(&qname)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// send topic
+// ---------------------------------------------------------------------------
+
+async fn run_send_topic(
+    pool: &Arc<PgPool>,
+    base: &str,
+    n_queues: usize,
+    count: u64,
+    concurrency: usize,
+    async_commit: bool,
+) -> Result<BenchResult> {
+    setup_topic_queues(pool, base, n_queues).await?;
+    let routing_key = format!("{base}.x");
+
+    let per_worker = count.div_ceil(concurrency as u64) as usize;
+    let total_ops = per_worker * concurrency;
+
+    let start = Instant::now();
+    let mut set: JoinSet<Result<Vec<u64>>> = JoinSet::new();
+
+    for _ in 0..concurrency {
+        let pool = Arc::clone(pool);
+        let routing_key = routing_key.clone();
+        set.spawn(async move {
+            let mut samples = Vec::with_capacity(per_worker);
+            for _ in 0..per_worker {
+                let t = Instant::now();
+                sqlx::query(&format!(
+                    r#"SELECT {}.send_topic($1, '{{"b":1}}'::jsonb, 0)"#,
+                    sc()
+                ))
+                .bind(&routing_key)
+                .execute(pool.as_ref())
+                .await?;
+                samples.push(t.elapsed().as_micros() as u64);
+            }
+            Ok(samples)
+        });
+    }
+
+    let mut hist = Histogram::<u64>::new(3)?;
+    while let Some(result) = set.join_next().await {
+        for us in result?? {
+            hist.record(us)?;
+        }
+    }
+
+    let elapsed = start.elapsed();
+    Ok(BenchResult {
+        scenario: format!("send-topic n={n_queues} c={concurrency}"),
+        async_commit,
+        total_ops: total_ops as u64,
+        elapsed_secs: elapsed.as_secs_f64(),
+        msgs_per_sec: total_ops as f64 / elapsed.as_secs_f64(),
+        p50_us: hist.value_at_quantile(0.50),
+        p99_us: hist.value_at_quantile(0.99),
+        p999_us: hist.value_at_quantile(0.999),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// send_batch_topic
+// ---------------------------------------------------------------------------
+
+async fn run_send_batch_topic(
+    pool: &Arc<PgPool>,
+    base: &str,
+    n_queues: usize,
+    batch_size: usize,
+    count: u64,
+    concurrency: usize,
+    async_commit: bool,
+) -> Result<BenchResult> {
+    setup_topic_queues(pool, base, n_queues).await?;
+    let routing_key = format!("{base}.x");
+
+    let total_batches = count.div_ceil(batch_size as u64) as usize;
+    let ops_per_worker = total_batches.div_ceil(concurrency);
+    let total_msgs = ops_per_worker * concurrency * batch_size;
+
+    let start = Instant::now();
+    let mut set: JoinSet<Result<Vec<u64>>> = JoinSet::new();
+
+    for _ in 0..concurrency {
+        let pool = Arc::clone(pool);
+        let routing_key = routing_key.clone();
+        let msgs: Vec<serde_json::Value> =
+            (0..batch_size).map(|i| serde_json::json!({"b": i})).collect();
+        set.spawn(async move {
+            let mut samples = Vec::with_capacity(ops_per_worker);
+            for _ in 0..ops_per_worker {
+                let t = Instant::now();
+                sqlx::query(&format!(
+                    "SELECT * FROM {}.send_batch_topic($1, $2::jsonb[], 0)",
+                    sc()
+                ))
+                .bind(&routing_key)
+                .bind(&msgs)
+                .execute(pool.as_ref())
+                .await?;
+                samples.push(t.elapsed().as_micros() as u64);
+            }
+            Ok(samples)
+        });
+    }
+
+    let mut hist = Histogram::<u64>::new(3)?;
+    while let Some(result) = set.join_next().await {
+        for us in result?? {
+            hist.record(us)?;
+        }
+    }
+
+    let elapsed = start.elapsed();
+    Ok(BenchResult {
+        scenario: format!("send-topic b={batch_size} n={n_queues} c={concurrency}"),
+        async_commit,
+        total_ops: total_msgs as u64,
+        elapsed_secs: elapsed.as_secs_f64(),
+        msgs_per_sec: total_msgs as f64 / elapsed.as_secs_f64(),
+        p50_us: hist.value_at_quantile(0.50),
+        p99_us: hist.value_at_quantile(0.99),
+        p999_us: hist.value_at_quantile(0.999),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +1060,7 @@ async fn run_all(
     oss_pool: Option<&Arc<PgPool>>,
     profile: Profile,
     fifo: bool,
+    topic: bool,
     async_commit: bool,
 ) -> Result<Vec<BenchResult>> {
     let (send_n, recv_n, rt_n): (u64, u64, u64) = match profile {
@@ -999,6 +1152,48 @@ async fn run_all(
         scenario!(
             format!("fifo-recv c=8 g=100  ({recv_n} msgs)"),
             run_receive_fifo(pool, "bench_frecv100c", recv_n, 8, 100, async_commit)
+        );
+    }
+
+    if topic {
+        tracing::info!("=== topic send ===");
+        // n=1 establishes routing overhead vs raw send; n=4/16 show fanout scaling.
+        // setup_topic_queues is additive: running n=1 then n=4 reuses the first queue.
+        scenario!(
+            format!("send-topic n=1  c=1  ({send_n} ops)"),
+            run_send_topic(pool, "bench_topic", 1, send_n, 1, async_commit)
+        );
+        scenario!(
+            format!("send-topic n=4  c=1  ({send_n} ops)"),
+            run_send_topic(pool, "bench_topic", 4, send_n, 1, async_commit)
+        );
+        scenario!(
+            format!("send-topic n=16 c=1  ({send_n} ops)"),
+            run_send_topic(pool, "bench_topic", 16, send_n, 1, async_commit)
+        );
+        scenario!(
+            format!("send-topic n=4  c=8  ({send_n} ops)"),
+            run_send_topic(pool, "bench_topic", 4, send_n, 8, async_commit)
+        );
+        scenario!(
+            format!("send-topic n=16 c=8  ({send_n} ops)"),
+            run_send_topic(pool, "bench_topic", 16, send_n, 8, async_commit)
+        );
+
+        tracing::info!("=== topic batch send ===");
+        // msgs_per_sec = total messages submitted (calls × batch_size), matching
+        // the existing batch-send metric — n_queues tells you the fanout factor.
+        scenario!(
+            format!("send-topic b=100 n=4  c=1  ({send_n} msgs)"),
+            run_send_batch_topic(pool, "bench_topic_b", 4, 100, send_n, 1, async_commit)
+        );
+        scenario!(
+            format!("send-topic b=100 n=16 c=1  ({send_n} msgs)"),
+            run_send_batch_topic(pool, "bench_topic_b", 16, 100, send_n, 1, async_commit)
+        );
+        scenario!(
+            format!("send-topic b=100 n=4  c=8  ({send_n} msgs)"),
+            run_send_batch_topic(pool, "bench_topic_b", 4, 100, send_n, 8, async_commit)
         );
     }
 

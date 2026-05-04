@@ -845,6 +845,173 @@ fn change_visibility_batch_ts(
     TableIterator::new(rows.into_iter())
 }
 
+// ---------------------------------------------------------------------------
+// send_topic  (pgrx hot path — replaces PL/pgSQL loop in schema.sql)
+// ---------------------------------------------------------------------------
+
+fn validate_routing_key(routing_key: &str) {
+    if routing_key.is_empty() {
+        pgrx::error!("routing_key cannot be NULL or empty");
+    }
+    if routing_key.len() > 255 {
+        pgrx::error!("routing_key length cannot exceed 255 characters");
+    }
+    if !routing_key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        pgrx::error!(
+            "routing_key contains invalid characters. Got: {}",
+            routing_key
+        );
+    }
+    if routing_key.starts_with('.') {
+        pgrx::error!("routing_key cannot start with a dot");
+    }
+    if routing_key.ends_with('.') {
+        pgrx::error!("routing_key cannot end with a dot");
+    }
+    if routing_key.contains("..") {
+        pgrx::error!("routing_key cannot contain consecutive dots");
+    }
+}
+
+/// Fanout a single message to every queue whose binding matches `routing_key`.
+/// One SPI session for routing + N inserts. msg/headers are converted to DatumWithOid
+/// once before SPI, so the JSONB datum passes through without per-queue re-serialization —
+/// unlike the PL/pgSQL path which calls queue.send() N times and pays a full
+/// datum→serde_json→datum round-trip per queue.
+#[pg_extern(name = "send_topic", schema = "queue", volatile, parallel_safe)]
+fn send_topic_pgrx(
+    routing_key: &str,
+    msg: pgrx::JsonB,
+    headers: Option<pgrx::JsonB>,
+    delay: TimestampWithTimeZone,
+) -> i32 {
+    validate_routing_key(routing_key);
+
+    // Convert to DatumWithOid before SPI — avoids per-queue JSON re-serialization.
+    let msg_dow: DatumWithOid<'_> = msg.into();
+    let hdr_dow: DatumWithOid<'_> = match headers {
+        Some(h) => h.into(),
+        None => DatumWithOid::null_oid(<pgrx::JsonB>::type_oid()),
+    };
+
+    let queue_names: Vec<String> = Spi::connect_mut(|client| {
+        // Collect routing results first (exhausts the SPI cursor before inserting).
+        let names: Vec<String> = client
+            .select(
+                "SELECT DISTINCT queue_name FROM queue.topic_bindings \
+                 WHERE $1 ~ compiled_regex ORDER BY queue_name",
+                None,
+                &[routing_key.into()],
+            )?
+            .filter_map(|row| row.get::<&str>(1).ok().flatten().map(str::to_string))
+            .collect();
+
+        for name in &names {
+            validate_name(name);
+            let qtable = format!("queue.q_{name}");
+            let sql = format!(
+                "INSERT INTO {qtable} (vt, message, headers) VALUES ($1, $2, $3)"
+            );
+            client.update(&sql, None, &[
+                delay.into(),
+                // SAFETY: datum() copies the raw pg_sys::Datum (usize) without moving the DatumWithOid.
+                unsafe { DatumWithOid::new_from_datum(msg_dow.datum(), msg_dow.oid()) },
+                unsafe { DatumWithOid::new_from_datum(hdr_dow.datum(), hdr_dow.oid()) },
+            ])?;
+        }
+
+        Ok::<_, spi::Error>(names)
+    })
+    .unwrap_or_else(|e| pgrx::error!("queue.send_topic: {e}"));
+
+    for name in &queue_names {
+        unsafe { crate::waiter::register_notify_after_commit(name) };
+    }
+
+    queue_names.len() as i32
+}
+
+// ---------------------------------------------------------------------------
+// send_batch_topic  (pgrx hot path — replaces PL/pgSQL loop in schema.sql)
+// ---------------------------------------------------------------------------
+
+/// Fanout a batch of messages to every queue whose binding matches `routing_key`.
+/// One SPI session: one routing scan + N inserts — no per-queue Spi::connect overhead.
+#[pg_extern(name = "send_batch_topic", schema = "queue", volatile, parallel_safe)]
+fn send_batch_topic_pgrx(
+    routing_key: &str,
+    msgs: pgrx::Array<pgrx::JsonB>,
+    headers: Option<pgrx::Array<pgrx::JsonB>>,
+    delay: TimestampWithTimeZone,
+) -> TableIterator<
+    'static,
+    (
+        name!(queue_name, String),
+        name!(msg_id, i64),
+    ),
+> {
+    validate_routing_key(routing_key);
+
+    // Convert arrays to DatumWithOid before Spi::connect — arrays borrow PG memory
+    // that cannot cross the SPI connection boundary.
+    let msgs_dow: DatumWithOid<'_> = msgs.into();
+    let hdrs_dow: DatumWithOid<'_> = match headers {
+        Some(h) => h.into(),
+        None => DatumWithOid::null_oid(<pgrx::Array<pgrx::JsonB>>::type_oid()),
+    };
+
+    let (queue_names, rows) = Spi::connect_mut(|client| {
+        let queue_names: Vec<String> = {
+            let mut names = Vec::new();
+            for row in client.select(
+                "SELECT DISTINCT queue_name FROM queue.topic_bindings \
+                 WHERE $1 ~ compiled_regex ORDER BY queue_name",
+                None,
+                &[routing_key.into()],
+            )? {
+                if let Some(name) = row.get::<&str>(1)? {
+                    names.push(name.to_string());
+                }
+            }
+            names
+        };
+
+        let mut out: Vec<(String, i64)> = Vec::new();
+        for name in &queue_names {
+            validate_name(name);
+            let qtable = format!("queue.q_{name}");
+            let sql = format!(
+                "INSERT INTO {qtable} (vt, message, headers) \
+                 SELECT $1, unnest($2::jsonb[]), unnest(coalesce($3::jsonb[], ARRAY[]::jsonb[])) \
+                 RETURNING msg_id"
+            );
+            for row in client.update(&sql, None, &[
+                    delay.into(),
+                    // SAFETY: datum() copies the raw pg_sys::Datum (usize) without moving msgs_dow,
+                    // so we can reconstruct per iteration. new_from_datum just stores datum + oid.
+                    unsafe { DatumWithOid::new_from_datum(msgs_dow.datum(), msgs_dow.oid()) },
+                    unsafe { DatumWithOid::new_from_datum(hdrs_dow.datum(), hdrs_dow.oid()) },
+                ])? {
+                if let Some(id) = row.get::<i64>(1)? {
+                    out.push((name.clone(), id));
+                }
+            }
+        }
+
+        Ok::<_, spi::Error>((queue_names, out))
+    })
+    .unwrap_or_else(|e| pgrx::error!("queue.send_batch_topic: {e}"));
+
+    for name in &queue_names {
+        unsafe { crate::waiter::register_notify_after_commit(name) };
+    }
+
+    TableIterator::new(rows.into_iter())
+}
+
 #[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
 fn change_visibility_batch_secs(
     queue_name: &str,

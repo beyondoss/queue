@@ -191,3 +191,25 @@ CREATE FUNCTION queue.receive_fifo(
 )
 LANGUAGE C VOLATILE
 AS '$libdir/libbeyond_queue_extension', 'receive_fifo_fn_wrapper';
+
+-- send_topic (pgrx) — replaces TIMESTAMPTZ canonical from hot_paths.sql
+DROP FUNCTION IF EXISTS queue.send_topic(TEXT, JSONB, JSONB, TIMESTAMP WITH TIME ZONE);
+CREATE FUNCTION queue.send_topic(
+    routing_key TEXT,
+    msg         JSONB,
+    headers     JSONB,
+    delay       TIMESTAMP WITH TIME ZONE
+) RETURNS INTEGER
+LANGUAGE C VOLATILE
+AS '$libdir/libbeyond_queue_extension', 'send_topic_pgrx_wrapper';
+
+-- send_batch_topic (pgrx) — replaces TIMESTAMPTZ canonical from schema.sql
+DROP FUNCTION IF EXISTS queue.send_batch_topic(TEXT, JSONB[], JSONB[], TIMESTAMP WITH TIME ZONE);
+CREATE FUNCTION queue.send_batch_topic(
+    routing_key TEXT,
+    msgs        JSONB[],
+    headers     JSONB[],
+    delay       TIMESTAMP WITH TIME ZONE
+) RETURNS TABLE (queue_name TEXT, msg_id BIGINT)
+LANGUAGE C VOLATILE
+AS '$libdir/libbeyond_queue_extension', 'send_batch_topic_pgrx_wrapper';
