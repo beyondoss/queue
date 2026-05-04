@@ -27,26 +27,36 @@ pub async fn handle(
 
     let message_id = Uuid::new_v4().to_string();
     let topic_arn = ctx.topic_arn(&topic_name);
+    let timestamp = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-    // SNS notification envelope — this is the SQS message body consumers receive
+    // SNS notification envelope — delivered to sqs/http(s) subscribers with raw_delivery=false
     let envelope = serde_json::json!({
         "Type": "Notification",
         "MessageId": message_id,
         "TopicArn": topic_arn,
         "Subject": req.subject,
         "Message": req.message,
-        "Timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "SignatureVersion": "1",
-        "Signature": "EXAMPLE",
-        "SigningCertURL": format!("https://sns.{}.amazonaws.com/SimpleNotificationService.pem", "us-east-1"),
+        "Timestamp": timestamp,
+        "SignatureVersion": "2",
+        "Signature": state.signer.sign_notification(&topic_arn, &message_id, &req.message, &timestamp),
+        "SigningCertURL": format!("{}/SimpleNotificationService.pem", ctx.base_url.trim_end_matches('/')),
         "UnsubscribeURL": format!("{}/", ctx.base_url.trim_end_matches('/')),
     });
+
+    // Raw message for subscribers with raw_delivery=true: just the message content.
+    let raw_message = serde_json::json!({ "Message": req.message, "Subject": req.subject });
 
     // Stored as {"Body": "<envelope-json-string>"} so SQS ReceiveMessage surfaces
     // the envelope string in the Body field, matching real SNS→SQS delivery.
     let stored = serde_json::json!({ "Body": envelope.to_string() });
 
+    // Fan out to SQS queues
     topic::send_topic(&state.pool, &topic_name, stored, None, 0)
+        .await
+        .map_err(|e| ctx.internal_error(e))?;
+
+    // Queue HTTP/HTTPS deliveries
+    topic::queue_http_deliveries(&state.pool, &topic_name, &raw_message, Some(&envelope))
         .await
         .map_err(|e| ctx.internal_error(e))?;
 

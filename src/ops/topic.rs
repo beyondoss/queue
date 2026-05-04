@@ -53,47 +53,87 @@ pub async fn send_topic(
     })
 }
 
+/// Queue HTTP/HTTPS deliveries for all subscriptions matching `routing_key`.
+/// `raw_message` is the original payload; `envelope` is the SNS notification JSON (None for REST API calls).
+/// Returns the number of deliveries queued.
+pub async fn queue_http_deliveries(
+    pool: &PgPool,
+    routing_key: &str,
+    raw_message: &serde_json::Value,
+    envelope: Option<&serde_json::Value>,
+) -> Result<i64, ApiError> {
+    let n = sqlx::query_scalar!(
+        r#"SELECT queue.queue_http_deliveries($1, $2::jsonb, $3::jsonb) AS "n!""#,
+        routing_key,
+        raw_message,
+        envelope,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
+}
+
 // ---------------------------------------------------------------------------
 // bindings
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct TopicSubscription {
+    pub id: i64,
     pub pattern: String,
-    pub queue_name: String,
+    pub protocol: String,
+    pub endpoint: String,
+    pub queue_name: Option<String>,
     pub bound_at: DateTime<Utc>,
+    pub raw_delivery: bool,
 }
 
-/// Bind `queue_name` to `pattern`. Silently succeeds if already bound.
-/// Single round-trip: the SQL function validates, inserts, and returns the row.
+/// Bind an endpoint to a pattern. Idempotent — silently succeeds if already bound.
 pub async fn subscribe(
     pool: &PgPool,
     pattern: &str,
-    queue_name: &str,
+    protocol: &str,
+    endpoint: &str,
+    queue_name: Option<&str>,
+    raw_delivery: bool,
 ) -> Result<TopicSubscription, ApiError> {
     let row = sqlx::query!(
-        r#"SELECT r_pattern AS "pattern!", r_queue_name AS "queue_name!", r_bound_at AS "bound_at!: DateTime<Utc>"
-           FROM queue.subscribe($1, $2)"#,
+        r#"SELECT
+               r_id           AS "id!: i64",
+               r_pattern      AS "pattern!",
+               r_protocol     AS "protocol!",
+               r_endpoint     AS "endpoint!",
+               r_queue_name   AS "queue_name",
+               r_bound_at     AS "bound_at!: DateTime<Utc>",
+               r_raw_delivery AS "raw_delivery!"
+           FROM queue.subscribe($1, $2, $3, $4, $5)"#,
         pattern,
+        protocol,
+        endpoint,
         queue_name,
+        raw_delivery,
     )
     .fetch_one(pool)
     .await
     .map_err(topic_bind_error)?;
 
     Ok(TopicSubscription {
+        id: row.id,
         pattern: row.pattern,
+        protocol: row.protocol,
+        endpoint: row.endpoint,
         queue_name: row.queue_name,
         bound_at: row.bound_at,
+        raw_delivery: row.raw_delivery,
     })
 }
 
-/// Remove the binding. Returns `BindingNotFound` if it did not exist.
-pub async fn unsubscribe(pool: &PgPool, pattern: &str, queue_name: &str) -> Result<(), ApiError> {
+/// Remove the binding by endpoint. Returns `BindingNotFound` if it did not exist.
+pub async fn unsubscribe(pool: &PgPool, pattern: &str, endpoint: &str) -> Result<(), ApiError> {
     let row = sqlx::query!(
         r#"SELECT queue.unsubscribe($1, $2) AS "removed!: bool""#,
         pattern,
-        queue_name,
+        endpoint,
     )
     .fetch_one(pool)
     .await?;
@@ -105,16 +145,100 @@ pub async fn unsubscribe(pool: &PgPool, pattern: &str, queue_name: &str) -> Resu
     }
 }
 
-/// All queues bound to `pattern`, ordered by queue name.
+/// Remove the binding by subscription id. Returns `BindingNotFound` if it did not exist.
+pub async fn unsubscribe_by_id(pool: &PgPool, id: i64) -> Result<(), ApiError> {
+    let result = sqlx::query!(
+        r#"DELETE FROM queue.topic_subscriptions WHERE id = $1 RETURNING id AS "id!: i64""#,
+        id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if result.is_some() {
+        Ok(())
+    } else {
+        Err(ApiError::BindingNotFound)
+    }
+}
+
+/// Look up a subscription by (pattern, queue_name) — for SQS ARN lookups.
+pub async fn get_by_queue(
+    pool: &PgPool,
+    pattern: &str,
+    queue_name: &str,
+) -> Result<Option<TopicSubscription>, ApiError> {
+    let row = sqlx::query!(
+        r#"SELECT
+               id           AS "id!: i64",
+               pattern      AS "pattern!",
+               protocol     AS "protocol!",
+               endpoint     AS "endpoint!",
+               queue_name,
+               bound_at     AS "bound_at!: DateTime<Utc>",
+               raw_delivery AS "raw_delivery!"
+           FROM queue.topic_subscriptions WHERE pattern = $1 AND queue_name = $2"#,
+        pattern,
+        queue_name,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| TopicSubscription {
+        id: r.id,
+        pattern: r.pattern,
+        protocol: r.protocol,
+        endpoint: r.endpoint,
+        queue_name: r.queue_name,
+        bound_at: r.bound_at,
+        raw_delivery: r.raw_delivery,
+    }))
+}
+
+/// Look up a subscription by id.
+pub async fn get_by_id(pool: &PgPool, id: i64) -> Result<Option<TopicSubscription>, ApiError> {
+    let row = sqlx::query!(
+        r#"SELECT
+               id           AS "id!: i64",
+               pattern      AS "pattern!",
+               protocol     AS "protocol!",
+               endpoint     AS "endpoint!",
+               queue_name,
+               bound_at     AS "bound_at!: DateTime<Utc>",
+               raw_delivery AS "raw_delivery!"
+           FROM queue.topic_subscriptions WHERE id = $1"#,
+        id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| TopicSubscription {
+        id: r.id,
+        pattern: r.pattern,
+        protocol: r.protocol,
+        endpoint: r.endpoint,
+        queue_name: r.queue_name,
+        bound_at: r.bound_at,
+        raw_delivery: r.raw_delivery,
+    }))
+}
+
+/// All subscriptions bound to `pattern`, ordered by endpoint.
 pub async fn list_by_pattern(
     pool: &PgPool,
     pattern: &str,
 ) -> Result<Vec<TopicSubscription>, ApiError> {
     let rows = sqlx::query!(
-        r#"SELECT pattern, queue_name, bound_at
+        r#"SELECT
+               id           AS "id!: i64",
+               pattern      AS "pattern!",
+               protocol     AS "protocol!",
+               endpoint     AS "endpoint!",
+               queue_name,
+               bound_at     AS "bound_at!: DateTime<Utc>",
+               raw_delivery AS "raw_delivery!"
            FROM queue.topic_subscriptions
            WHERE pattern = $1
-           ORDER BY queue_name"#,
+           ORDER BY endpoint"#,
         pattern,
     )
     .fetch_all(pool)
@@ -123,19 +247,30 @@ pub async fn list_by_pattern(
     Ok(rows
         .into_iter()
         .map(|r| TopicSubscription {
+            id: r.id,
             pattern: r.pattern,
+            protocol: r.protocol,
+            endpoint: r.endpoint,
             queue_name: r.queue_name,
             bound_at: r.bound_at,
+            raw_delivery: r.raw_delivery,
         })
         .collect())
 }
 
-/// All topic subscriptions across all patterns, ordered by pattern then queue.
+/// All topic subscriptions across all patterns.
 pub async fn list_all_subscriptions(pool: &PgPool) -> Result<Vec<TopicSubscription>, ApiError> {
     let rows = sqlx::query!(
-        r#"SELECT pattern, queue_name, bound_at
+        r#"SELECT
+               id           AS "id!: i64",
+               pattern      AS "pattern!",
+               protocol     AS "protocol!",
+               endpoint     AS "endpoint!",
+               queue_name,
+               bound_at     AS "bound_at!: DateTime<Utc>",
+               raw_delivery AS "raw_delivery!"
            FROM queue.topic_subscriptions
-           ORDER BY pattern, queue_name"#,
+           ORDER BY pattern, endpoint"#,
     )
     .fetch_all(pool)
     .await?;
@@ -143,9 +278,13 @@ pub async fn list_all_subscriptions(pool: &PgPool) -> Result<Vec<TopicSubscripti
     Ok(rows
         .into_iter()
         .map(|r| TopicSubscription {
+            id: r.id,
             pattern: r.pattern,
+            protocol: r.protocol,
+            endpoint: r.endpoint,
             queue_name: r.queue_name,
             bound_at: r.bound_at,
+            raw_delivery: r.raw_delivery,
         })
         .collect())
 }
@@ -170,13 +309,20 @@ pub async fn delete_sns_topic(pool: &PgPool, pattern: &str) -> Result<(), ApiErr
     Ok(())
 }
 
-/// All patterns `queue_name` is bound to, ordered by pattern.
+/// All patterns a queue is bound to, ordered by pattern.
 pub async fn list_by_queue(
     pool: &PgPool,
     queue_name: &str,
 ) -> Result<Vec<TopicSubscription>, ApiError> {
     let rows = sqlx::query!(
-        r#"SELECT pattern, queue_name, bound_at
+        r#"SELECT
+               id           AS "id!: i64",
+               pattern      AS "pattern!",
+               protocol     AS "protocol!",
+               endpoint     AS "endpoint!",
+               queue_name,
+               bound_at     AS "bound_at!: DateTime<Utc>",
+               raw_delivery AS "raw_delivery!"
            FROM queue.topic_subscriptions
            WHERE queue_name = $1
            ORDER BY pattern"#,
@@ -188,9 +334,13 @@ pub async fn list_by_queue(
     Ok(rows
         .into_iter()
         .map(|r| TopicSubscription {
+            id: r.id,
             pattern: r.pattern,
+            protocol: r.protocol,
+            endpoint: r.endpoint,
             queue_name: r.queue_name,
             bound_at: r.bound_at,
+            raw_delivery: r.raw_delivery,
         })
         .collect())
 }

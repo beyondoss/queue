@@ -4,6 +4,7 @@ use axum::response::IntoResponse;
 use crate::AppState;
 use crate::ops::topic;
 use crate::sns::actions::list_subscriptions::subscription_entry;
+
 use crate::sns::context::SnsContext;
 use crate::sns::error::{SnsError, SnsErrorCode};
 use crate::sns::types::{ListSubscriptionsByTopicRequest, ListSubscriptionsResponse};
@@ -23,9 +24,6 @@ pub async fn handle(
         .map_err(|e| ctx.internal_error(e))?;
 
     Ok(ctx.ok(ListSubscriptionsResponse {
-        subscriptions: subs
-            .into_iter()
-            .map(|s| subscription_entry(&ctx, &s.pattern, &s.queue_name))
-            .collect(),
+        subscriptions: subs.iter().map(|s| subscription_entry(&ctx, s)).collect(),
     }))
 }

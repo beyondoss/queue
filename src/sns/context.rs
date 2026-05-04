@@ -80,6 +80,17 @@ impl SnsContext {
         format!("arn:aws:sns:{}:{}:{}:{}", REGION, ACCOUNT, topic, queue)
     }
 
+    pub fn subscription_arn_http(&self, topic: &str, id: i64) -> String {
+        format!("arn:aws:sns:{}:{}:{}:{}", REGION, ACCOUNT, topic, id)
+    }
+
+    pub fn subscription_arn_for(&self, sub: &crate::ops::topic::TopicSubscription) -> String {
+        match sub.protocol.as_str() {
+            "sqs" => self.subscription_arn(&sub.pattern, sub.queue_name.as_deref().unwrap_or("")),
+            _ => self.subscription_arn_http(&sub.pattern, sub.id),
+        }
+    }
+
     /// Extract topic name from a topic ARN or return the input as-is (for name-only callers).
     pub fn topic_name_from_arn<'a>(&self, arn: &'a str) -> Option<&'a str> {
         if arn.starts_with("arn:") {
@@ -132,20 +143,42 @@ fn append_xml_field(xml: &mut String, key: &str, val: &serde_json::Value, depth:
     let indent = "  ".repeat(depth);
     match val {
         serde_json::Value::Array(arr) => {
+            // Wrap array items in the field's own key tag, then each item in <member>.
+            xml.push_str(&format!("{}<{}>\n", indent, key));
             for item in arr {
-                xml.push_str(&format!("{}<member>\n", indent));
+                xml.push_str(&format!("{}  <member>\n", indent));
                 if let serde_json::Value::Object(m) = item {
                     for (k, v) in m {
-                        append_xml_field(xml, k, v, depth + 1);
+                        append_xml_field(xml, k, v, depth + 2);
                     }
                 }
-                xml.push_str(&format!("{}</member>\n", indent));
+                xml.push_str(&format!("{}  </member>\n", indent));
             }
+            xml.push_str(&format!("{}</{}>\n", indent, key));
         }
         serde_json::Value::Object(m) => {
             xml.push_str(&format!("{}<{}>\n", indent, key));
-            for (k, v) in m {
-                append_xml_field(xml, k, v, depth + 1);
+            if key == "Attributes" {
+                // SNS attribute maps use <entry><key>/<value> pairs.
+                for (k, v) in m {
+                    let text = v
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| v.to_string());
+                    xml.push_str(&format!(
+                        "{}  <entry>\n{}    <key>{}</key>\n{}    <value>{}</value>\n{}  </entry>\n",
+                        indent,
+                        indent,
+                        escape_xml(k),
+                        indent,
+                        escape_xml(&text),
+                        indent
+                    ));
+                }
+            } else {
+                for (k, v) in m {
+                    append_xml_field(xml, k, v, depth + 1);
+                }
             }
             xml.push_str(&format!("{}</{}>\n", indent, key));
         }

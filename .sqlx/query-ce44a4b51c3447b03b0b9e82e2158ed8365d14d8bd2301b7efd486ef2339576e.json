@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               r_id           AS \"id!: i64\",\n               r_pattern      AS \"pattern!\",\n               r_protocol     AS \"protocol!\",\n               r_endpoint     AS \"endpoint!\",\n               r_queue_name   AS \"queue_name\",\n               r_bound_at     AS \"bound_at!: DateTime<Utc>\",\n               r_raw_delivery AS \"raw_delivery!\"\n           FROM queue.subscribe($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "pattern!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "protocol!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "endpoint!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "queue_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "bound_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "raw_delivery!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ce44a4b51c3447b03b0b9e82e2158ed8365d14d8bd2301b7efd486ef2339576e"
+}

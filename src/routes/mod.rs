@@ -3,12 +3,15 @@ pub mod queues;
 pub mod topics;
 
 use axum::Router;
+use axum::extract::State;
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 
 use crate::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/cert", get(serve_cert))
         .route(
             "/queues",
             post(queues::create_queue).get(queues::list_queues),
@@ -38,7 +41,14 @@ pub fn router() -> Router<AppState> {
             post(topics::subscribe_queue).get(topics::list_subscriptions),
         )
         .route(
-            "/topics/{pattern}/subscriptions/{queue_name}",
+            "/topics/{pattern}/subscriptions/{id}",
             delete(topics::unsubscribe_queue),
         )
+}
+
+async fn serve_cert(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [("content-type", "application/x-pem-file")],
+        state.signer.cert_pem().to_string(),
+    )
 }

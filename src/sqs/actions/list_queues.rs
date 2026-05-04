@@ -12,7 +12,7 @@ pub async fn handle(
     ctx: SqsContext,
     req: ListQueuesRequest,
 ) -> Result<impl IntoResponse, SqsError> {
-    let queues = queue_admin::list_queues(&state.pool)
+    let queues = queue_admin::list_queues(&state.pool, None)
         .await
         .map_err(|e| ctx.internal_error(e))?;
 

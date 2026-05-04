@@ -1,4 +1,5 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use sqlx::PgPool;
 use testcontainers::ImageExt;
@@ -174,6 +175,92 @@ impl TestClient {
                 .expect("PATCH"),
         )
         .await
+    }
+}
+
+// ── TestWebhook ───────────────────────────────────────────────────────────────
+
+pub struct TestWebhook {
+    pub url: String,
+    received: Arc<Mutex<Vec<serde_json::Value>>>,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl TestWebhook {
+    pub async fn start() -> Self {
+        Self::spawn(None).await
+    }
+
+    /// Start a webhook that returns the given status codes in sequence (then 200 for all remaining).
+    pub async fn with_status_sequence(statuses: Vec<u16>) -> Self {
+        Self::spawn(Some(Arc::new(Mutex::new(statuses)))).await
+    }
+
+    async fn spawn(statuses: Option<Arc<Mutex<Vec<u16>>>>) -> Self {
+        let received: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let counter = Arc::new(Mutex::new(0usize));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let r = received.clone();
+        let n = notify.clone();
+        tokio::spawn(async move {
+            let app = axum::Router::new().route(
+                "/{*path}",
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let r = r.clone();
+                    let n = n.clone();
+                    let statuses = statuses.clone();
+                    let counter = counter.clone();
+                    async move {
+                        r.lock().unwrap().push(body);
+                        n.notify_waiters();
+                        let status_code = if let Some(seq) = statuses {
+                            let idx = {
+                                let mut c = counter.lock().unwrap();
+                                let i = *c;
+                                *c += 1;
+                                i
+                            };
+                            seq.lock().unwrap().get(idx).copied().unwrap_or(200)
+                        } else {
+                            200
+                        };
+                        axum::http::StatusCode::from_u16(status_code)
+                            .unwrap_or(axum::http::StatusCode::OK)
+                    }
+                }),
+            );
+            axum::serve(listener, app).await.ok();
+        });
+
+        Self {
+            url: format!("http://{addr}"),
+            received,
+            notify,
+        }
+    }
+
+    /// Block until at least `n` deliveries arrive or timeout elapses.
+    pub async fn wait_for(&self, n: usize, timeout: Duration) -> Vec<serde_json::Value> {
+        tokio::time::timeout(timeout, async {
+            loop {
+                {
+                    let msgs = self.received.lock().unwrap();
+                    if msgs.len() >= n {
+                        return msgs.clone();
+                    }
+                }
+                self.notify.notified().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for webhook delivery")
+    }
+
+    pub fn received_count(&self) -> usize {
+        self.received.lock().unwrap().len()
     }
 }
 

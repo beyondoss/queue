@@ -31,7 +31,7 @@ docker run --rm --name bq-sqlx-prepare \
   -d postgres:18
 echo "Waiting for postgres..."
 until docker exec bq-sqlx-prepare pg_isready -U postgres > /dev/null 2>&1; do sleep 0.5; done
-DB="postgresql://postgres:postgres@localhost:${PG_PORT}/postgres"
+DB="postgres://postgres:postgres@localhost:${PG_PORT}/postgres"
 docker exec bq-sqlx-prepare psql -U postgres -c "CREATE SCHEMA IF NOT EXISTS queue;"
 docker exec -i bq-sqlx-prepare psql -U postgres < beyond-queue-extension/sql/schema.sql
 docker exec -i bq-sqlx-prepare psql -U postgres < tests/fixtures/hot_paths.sql

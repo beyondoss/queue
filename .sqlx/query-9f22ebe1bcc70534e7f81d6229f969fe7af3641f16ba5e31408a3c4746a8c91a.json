@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            queue_name      AS \"queue_name!: String\",\n            is_partitioned  AS \"is_partitioned!: bool\",\n            is_unlogged     AS \"is_unlogged!: bool\",\n            created_at      AS \"created_at!: DateTime<Utc>\"\n        FROM queue.list_queues()\n        ",
+  "query": "\n        SELECT\n            queue_name      AS \"queue_name!: String\",\n            is_partitioned  AS \"is_partitioned!: bool\",\n            is_unlogged     AS \"is_unlogged!: bool\",\n            created_at      AS \"created_at!: DateTime<Utc>\"\n        FROM queue.list_queues($1)\n        ",
   "describe": {
     "columns": [
       {
@@ -25,7 +25,9 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text"
+      ]
     },
     "nullable": [
       null,
@@ -34,5 +36,5 @@
       null
     ]
   },
-  "hash": "7cd7d2b398290f62c0bbcd03182c8feec35a7752af3ae3ed371de56503e71b72"
+  "hash": "9f22ebe1bcc70534e7f81d6229f969fe7af3641f16ba5e31408a3c4746a8c91a"
 }

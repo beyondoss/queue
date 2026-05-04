@@ -46,7 +46,7 @@ pub async fn create_queue(
 }
 
 pub async fn list_queues(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    let queues = queue_admin::list_queues(&state.pool).await?;
+    let queues = queue_admin::list_queues(&state.pool, None).await?;
     let response: Vec<QueueResponse> = queues
         .into_iter()
         .map(|q| QueueResponse {

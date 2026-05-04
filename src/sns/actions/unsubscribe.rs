@@ -12,13 +12,21 @@ pub async fn handle(
     ctx: SnsContext,
     req: UnsubscribeRequest,
 ) -> Result<impl IntoResponse, SnsError> {
-    let (topic_name, queue_name) = ctx
+    let (topic_name, key) = ctx
         .parse_subscription_arn(&req.subscription_arn)
         .ok_or_else(|| ctx.error(SnsErrorCode::InvalidParameter))?;
 
-    topic::unsubscribe(&state.pool, &topic_name, &queue_name)
-        .await
-        .map_err(|e| ctx.internal_error(e))?;
+    // HTTP/HTTPS subs use a numeric id as the ARN key; SQS subs use queue_name.
+    if let Ok(id) = key.parse::<i64>() {
+        topic::unsubscribe_by_id(&state.pool, id)
+            .await
+            .map_err(|e| ctx.internal_error(e))?;
+    } else {
+        let endpoint = format!("sqs://{key}");
+        topic::unsubscribe(&state.pool, &topic_name, &endpoint)
+            .await
+            .map_err(|e| ctx.internal_error(e))?;
+    }
 
     Ok(ctx.empty_ok())
 }

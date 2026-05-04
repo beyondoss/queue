@@ -2,6 +2,31 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+// Query protocol sends all values as strings; these helpers accept both number and string.
+fn de_i32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = i32;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("integer or string")
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<i32, E> {
+            Ok(v as i32)
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<i32, E> {
+            Ok(v as i32)
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<i32, E> {
+            v.parse().map_err(E::custom)
+        }
+    }
+    d.deserialize_any(V)
+}
+
+fn de_opt_i32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i32>, D::Error> {
+    de_i32(d).map(Some)
+}
+
 // ---- Common ----
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -19,7 +44,7 @@ pub struct MessageAttribute {
 pub struct SendMessageRequest {
     pub queue_url: Option<String>,
     pub message_body: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_i32")]
     pub delay_seconds: i32,
     #[serde(default)]
     pub message_attributes: HashMap<String, MessageAttribute>,
@@ -42,7 +67,7 @@ pub struct SendMessageResponse {
 pub struct SendMessageBatchRequestEntry {
     pub id: String,
     pub message_body: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_i32")]
     pub delay_seconds: i32,
     #[serde(default)]
     pub message_attributes: HashMap<String, MessageAttribute>,
@@ -79,10 +104,11 @@ pub struct SendMessageBatchResponse {
 #[serde(rename_all = "PascalCase")]
 pub struct ReceiveMessageRequest {
     pub queue_url: Option<String>,
-    #[serde(default = "default_max_messages")]
+    #[serde(default = "default_max_messages", deserialize_with = "de_i32")]
     pub max_number_of_messages: i32,
+    #[serde(default, deserialize_with = "de_opt_i32")]
     pub visibility_timeout: Option<i32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_i32")]
     pub wait_time_seconds: i32,
     #[serde(default)]
     pub attribute_names: Vec<String>,
@@ -158,6 +184,7 @@ pub struct DeleteMessageBatchResponse {
 pub struct ChangeMessageVisibilityRequest {
     pub queue_url: Option<String>,
     pub receipt_handle: String,
+    #[serde(deserialize_with = "de_i32")]
     pub visibility_timeout: i32,
 }
 
@@ -168,6 +195,7 @@ pub struct ChangeMessageVisibilityRequest {
 pub struct ChangeMessageVisibilityBatchRequestEntry {
     pub id: String,
     pub receipt_handle: String,
+    #[serde(deserialize_with = "de_i32")]
     pub visibility_timeout: i32,
 }
 

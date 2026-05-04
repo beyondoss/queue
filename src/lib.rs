@@ -4,6 +4,7 @@ pub mod error;
 pub mod middleware;
 pub mod ops;
 pub mod routes;
+pub mod signing;
 pub mod sns;
 pub mod sqs;
 pub mod test_support;
@@ -24,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 
 use config::Config;
 use ops::coalesce::Coalescer;
+use signing::Signer;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -34,6 +36,8 @@ pub struct AppState {
     pub base_url: Arc<str>,
     /// Write coalescer for non-FIFO sends. None when LINGER_MS=0.
     pub coalescer: Option<Coalescer>,
+    /// RSA-2048 signer for SNS notification envelopes.
+    pub signer: Arc<Signer>,
 }
 
 /// Parse an AWS service request body: returns (is_json, action_name, parsed_body).
@@ -81,6 +85,19 @@ pub async fn run() -> anyhow::Result<()> {
         None
     };
 
+    if config.http_delivery_enabled {
+        tracing::info!("HTTP delivery worker enabled");
+        ops::delivery::start(
+            pool.clone(),
+            ops::delivery::DeliveryConfig {
+                poll_interval_ms: config.http_delivery_poll_ms,
+                delivery_timeout_secs: config.http_delivery_timeout_secs,
+                batch_size: 50,
+            },
+        );
+    }
+
+    let signer = Arc::new(Signer::generate());
     let base_url: Arc<str> = config.base_url().into();
     let address = config.address.clone();
     let state = AppState {
@@ -88,6 +105,7 @@ pub async fn run() -> anyhow::Result<()> {
         config: Arc::new(config),
         base_url,
         coalescer,
+        signer,
     };
 
     let app = build_router(state);
@@ -158,7 +176,15 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(api)
         .route("/healthz", get(healthz))
+        .route("/SimpleNotificationService.pem", get(serve_signing_cert))
         .with_state(state)
+}
+
+async fn serve_signing_cert(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [("content-type", "application/x-pem-file")],
+        state.signer.cert_pem().to_string(),
+    )
 }
 
 async fn healthz() -> impl IntoResponse {

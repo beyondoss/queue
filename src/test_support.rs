@@ -6,6 +6,8 @@ use tokio::net::TcpListener;
 
 use crate::AppState;
 use crate::config::Config;
+use crate::ops::delivery;
+use crate::signing::Signer;
 
 pub struct TestServer {
     pub url: String,
@@ -26,14 +28,29 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         otlp_enabled: false,
         otlp_endpoint: "http://localhost:4317".into(),
         base_url_override: Some(format!("http://{addr}")),
+        http_delivery_enabled: true,
+        http_delivery_poll_ms: 50,
+        http_delivery_timeout_secs: 5,
     };
 
+    // Start delivery worker with fast poll for tests
+    delivery::start(
+        pool.clone(),
+        delivery::DeliveryConfig {
+            poll_interval_ms: 50,
+            delivery_timeout_secs: 5,
+            batch_size: 50,
+        },
+    );
+
     let base_url: Arc<str> = config.base_url().into();
+    let signer = Arc::new(Signer::generate());
     let state = AppState {
         pool,
         config: Arc::new(config),
         base_url,
         coalescer: None,
+        signer,
     };
     let app = crate::build_router(state);
 

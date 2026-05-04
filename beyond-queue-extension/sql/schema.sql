@@ -27,13 +27,17 @@ CREATE INDEX IF NOT EXISTS idx_notify_throttle_active
     ON queue.notify_insert_throttle (queue_name, last_notified_at)
     WHERE throttle_interval_ms > 0;
 
--- Topic binding registry (wildcard routing key → queue)
+-- Topic binding registry (wildcard routing key → queue or HTTP endpoint)
 CREATE TABLE IF NOT EXISTS queue.topic_subscriptions (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     pattern        text NOT NULL,
-    queue_name     text NOT NULL
+    protocol       text NOT NULL DEFAULT 'sqs',  -- 'sqs' | 'http' | 'https'
+    endpoint       text NOT NULL,                -- sqs://{queue_name} for sqs; full URL for http/https
+    queue_name     text
         CONSTRAINT topic_subscriptions_meta_fk
             REFERENCES queue.meta (queue_name) ON DELETE CASCADE,
     bound_at       TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    raw_delivery   boolean NOT NULL DEFAULT false, -- true = post raw payload; false = SNS envelope
     compiled_regex text GENERATED ALWAYS AS (
         '^' ||
         replace(
@@ -44,12 +48,37 @@ CREATE TABLE IF NOT EXISTS queue.topic_subscriptions (
             '#', '.*'
         ) || '$'
     ) STORED,
-    CONSTRAINT topic_subscriptions_unique UNIQUE (pattern, queue_name)
+    CONSTRAINT topic_subscriptions_unique UNIQUE (pattern, endpoint),
+    CONSTRAINT topic_subscriptions_protocol_check CHECK (protocol IN ('sqs', 'http', 'https')),
+    CONSTRAINT topic_subscriptions_sqs_queue_check CHECK (protocol != 'sqs' OR queue_name IS NOT NULL)
 );
+
+
+-- Pending HTTP/HTTPS deliveries with retry tracking
+CREATE TABLE IF NOT EXISTS queue.http_deliveries (
+    id              BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    subscription_id BIGINT NOT NULL
+        REFERENCES queue.topic_subscriptions(id) ON DELETE CASCADE,
+    endpoint        text NOT NULL,
+    payload         jsonb NOT NULL,
+    attempt         integer NOT NULL DEFAULT 0,
+    max_attempts    integer NOT NULL DEFAULT 5,
+    next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    last_error      text,
+    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_http_deliveries_pending
+    ON queue.http_deliveries (next_attempt_at ASC)
+    WHERE attempt < max_attempts;
+
+DO $$ BEGIN
+    DROP INDEX IF EXISTS queue.idx_topic_subscriptions_covering;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_topic_subscriptions_covering
     ON queue.topic_subscriptions (pattern)
-    INCLUDE (queue_name, compiled_regex);
+    INCLUDE (id, queue_name, endpoint, protocol, raw_delivery, compiled_regex);
 
 DO
 $$
@@ -58,6 +87,7 @@ BEGIN
         PERFORM pg_catalog.pg_extension_config_dump('queue.meta', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.notify_insert_throttle', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.topic_subscriptions', '');
+        PERFORM pg_catalog.pg_extension_config_dump('queue.http_deliveries', '');
     END IF;
 END
 $$;
@@ -1217,36 +1247,53 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.subscribe(pattern text, queue_name text)
-RETURNS TABLE(r_pattern text, r_queue_name text, r_bound_at timestamptz) LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION queue.subscribe(
+    pattern      text,
+    protocol     text,
+    endpoint     text,
+    queue_name   text DEFAULT NULL,
+    raw_delivery boolean DEFAULT false
+)
+RETURNS TABLE(
+    r_id bigint, r_pattern text, r_protocol text, r_endpoint text,
+    r_queue_name text, r_bound_at timestamptz, r_raw_delivery boolean
+) LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM queue.validate_topic_pattern(pattern);
-    IF queue_name IS NULL OR queue_name = '' THEN
-        RAISE EXCEPTION 'queue_name cannot be NULL or empty' USING ERRCODE = 'Q0002';
+    IF protocol NOT IN ('sqs', 'http', 'https') THEN
+        RAISE EXCEPTION 'protocol must be sqs, http, or https' USING ERRCODE = 'Q0002';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM queue.meta WHERE meta.queue_name = subscribe.queue_name) THEN
-        RAISE EXCEPTION 'Queue "%" does not exist', queue_name USING ERRCODE = 'Q0001';
+    IF endpoint IS NULL OR endpoint = '' THEN
+        RAISE EXCEPTION 'endpoint cannot be NULL or empty' USING ERRCODE = 'Q0002';
     END IF;
-    INSERT INTO queue.topic_subscriptions (pattern, queue_name)
-    VALUES (subscribe.pattern, subscribe.queue_name)
+    IF protocol = 'sqs' THEN
+        IF queue_name IS NULL OR queue_name = '' THEN
+            RAISE EXCEPTION 'queue_name required for sqs protocol' USING ERRCODE = 'Q0002';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM queue.meta WHERE meta.queue_name = subscribe.queue_name) THEN
+            RAISE EXCEPTION 'Queue "%" does not exist', queue_name USING ERRCODE = 'Q0001';
+        END IF;
+    END IF;
+    INSERT INTO queue.topic_subscriptions (pattern, protocol, endpoint, queue_name, raw_delivery)
+    VALUES (subscribe.pattern, subscribe.protocol, subscribe.endpoint, subscribe.queue_name, subscribe.raw_delivery)
     ON CONFLICT ON CONSTRAINT topic_subscriptions_unique DO NOTHING;
     RETURN QUERY
-        SELECT ts.pattern, ts.queue_name, ts.bound_at
+        SELECT ts.id, ts.pattern, ts.protocol, ts.endpoint, ts.queue_name, ts.bound_at, ts.raw_delivery
         FROM queue.topic_subscriptions ts
-        WHERE ts.pattern = subscribe.pattern AND ts.queue_name = subscribe.queue_name;
+        WHERE ts.pattern = subscribe.pattern AND ts.endpoint = subscribe.endpoint;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.unsubscribe(pattern text, queue_name text)
+CREATE OR REPLACE FUNCTION queue.unsubscribe(pattern text, endpoint text)
 RETURNS boolean LANGUAGE plpgsql AS $$
 DECLARE
     rows_deleted integer;
 BEGIN
     IF pattern IS NULL OR pattern = '' THEN RAISE EXCEPTION 'pattern cannot be NULL or empty'; END IF;
-    IF queue_name IS NULL OR queue_name = '' THEN RAISE EXCEPTION 'queue_name cannot be NULL or empty'; END IF;
+    IF endpoint IS NULL OR endpoint = '' THEN RAISE EXCEPTION 'endpoint cannot be NULL or empty'; END IF;
     DELETE FROM queue.topic_subscriptions
     WHERE topic_subscriptions.pattern = unsubscribe.pattern
-      AND topic_subscriptions.queue_name = unsubscribe.queue_name;
+      AND topic_subscriptions.endpoint = unsubscribe.endpoint;
     GET DIAGNOSTICS rows_deleted = ROW_COUNT;
     RETURN rows_deleted > 0;
 END;
@@ -1297,20 +1344,43 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION queue.list_subscriptions()
-RETURNS TABLE (pattern text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, compiled_regex text)
+RETURNS TABLE (id bigint, pattern text, protocol text, endpoint text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, raw_delivery boolean)
 LANGUAGE sql STABLE AS $$
-    SELECT pattern, queue_name, bound_at, compiled_regex
+    SELECT id, pattern, protocol, endpoint, queue_name, bound_at, raw_delivery
     FROM queue.topic_subscriptions
-    ORDER BY bound_at DESC, pattern, queue_name;
+    ORDER BY bound_at DESC, pattern, endpoint;
 $$;
 
 CREATE OR REPLACE FUNCTION queue.list_subscriptions(queue_name text)
-RETURNS TABLE (pattern text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, compiled_regex text)
+RETURNS TABLE (id bigint, pattern text, protocol text, endpoint text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, raw_delivery boolean)
 LANGUAGE sql STABLE AS $$
-    SELECT tb.pattern, tb.queue_name, tb.bound_at, tb.compiled_regex
+    SELECT tb.id, tb.pattern, tb.protocol, tb.endpoint, tb.queue_name, tb.bound_at, tb.raw_delivery
     FROM queue.topic_subscriptions tb
     WHERE tb.queue_name = list_subscriptions.queue_name
     ORDER BY bound_at DESC, pattern;
+$$;
+
+-- Queue HTTP/HTTPS deliveries for subscriptions matching routing_key.
+-- raw_msg: the original message payload.
+-- envelope_msg: the SNS notification envelope (NULL = always use raw_msg).
+-- Stores raw_msg or envelope_msg per subscription's raw_delivery flag.
+CREATE OR REPLACE FUNCTION queue.queue_http_deliveries(
+    routing_key  text,
+    raw_msg      jsonb,
+    envelope_msg jsonb DEFAULT NULL
+) RETURNS bigint LANGUAGE plpgsql VOLATILE AS $$
+DECLARE
+    n bigint;
+BEGIN
+    INSERT INTO queue.http_deliveries (subscription_id, endpoint, payload)
+    SELECT ts.id, ts.endpoint,
+           CASE WHEN ts.raw_delivery OR envelope_msg IS NULL THEN raw_msg ELSE envelope_msg END
+    FROM queue.topic_subscriptions ts
+    WHERE routing_key ~ ts.compiled_regex
+      AND ts.protocol IN ('http', 'https');
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION queue.send_batch_topic(

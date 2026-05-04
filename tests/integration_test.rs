@@ -504,3 +504,180 @@ async fn test_healthz() {
         .expect("GET /healthz");
     assert_eq!(res.status().as_u16(), 200);
 }
+
+// ── HTTP webhook delivery ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_http_delivery_raw() {
+    let _ = test_env();
+    let client = TestClient::new();
+    let webhook = helpers::TestWebhook::start().await;
+
+    // Subscribe HTTP endpoint (raw delivery by default)
+    client
+        .post(
+            "/v1/topics/orders.*/subscriptions",
+            &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
+        )
+        .await
+        .assert_status(201);
+
+    // Publish via REST API
+    client
+        .post(
+            "/v1/topics/orders.placed",
+            &serde_json::json!({ "message": { "id": 42 } }),
+        )
+        .await
+        .assert_status(201);
+
+    let deliveries = webhook.wait_for(1, std::time::Duration::from_secs(5)).await;
+    // raw_delivery=true → raw payload posted directly (not SNS envelope)
+    assert_eq!(deliveries[0], serde_json::json!({ "id": 42 }));
+}
+
+#[tokio::test]
+async fn test_http_delivery_envelope() {
+    let _ = test_env();
+    let client = TestClient::new();
+    let webhook = helpers::TestWebhook::start().await;
+
+    // Subscribe with envelope=true to get SNS wrapper
+    client
+        .post(
+            "/v1/topics/events.*/subscriptions",
+            &serde_json::json!({ "protocol": "https", "endpoint": webhook.url, "envelope": true }),
+        )
+        .await
+        .assert_status(201);
+
+    client
+        .post(
+            "/v1/topics/events.created",
+            &serde_json::json!({ "message": { "type": "created" } }),
+        )
+        .await
+        .assert_status(201);
+
+    let deliveries = webhook.wait_for(1, std::time::Duration::from_secs(5)).await;
+    let msg = &deliveries[0];
+    assert_eq!(msg["Type"], "Notification");
+    assert!(msg["MessageId"].is_string());
+    assert!(msg["Signature"].is_string());
+    assert!(!msg["Signature"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_http_delivery_retry_on_failure() {
+    let _ = test_env();
+    let client = TestClient::new();
+    // First 2 requests return 500, then 200
+    let webhook = helpers::TestWebhook::with_status_sequence(vec![500, 500, 200]).await;
+
+    client
+        .post(
+            "/v1/topics/retry.*/subscriptions",
+            &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
+        )
+        .await
+        .assert_status(201);
+
+    client
+        .post(
+            "/v1/topics/retry.test",
+            &serde_json::json!({ "message": { "x": 1 } }),
+        )
+        .await
+        .assert_status(201);
+
+    // Wait for eventual delivery (may take a few poll cycles for retries)
+    // The worker records failures and retries; eventually the 3rd attempt succeeds.
+    // Use a generous timeout since retry backoff is 10s for attempt 1.
+    // We use a short backoff in tests is not configurable per-subscription, so
+    // just verify the body arrives eventually at attempt 3.
+    let deliveries = webhook
+        .wait_for(3, std::time::Duration::from_secs(30))
+        .await;
+    assert_eq!(deliveries.len(), 3);
+    assert_eq!(deliveries[2], serde_json::json!({ "x": 1 }));
+}
+
+#[tokio::test]
+async fn test_http_delivery_unsubscribe_cancels_pending() {
+    let _ = test_env();
+    let client = TestClient::new();
+    let webhook = helpers::TestWebhook::start().await;
+
+    // Subscribe and get the subscription id from the response
+    let sub = client
+        .post(
+            "/v1/topics/cancel.*/subscriptions",
+            &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
+        )
+        .await
+        .assert_status(201)
+        .json::<serde_json::Value>();
+    let sub_id = sub["id"].as_i64().expect("subscription id");
+
+    // Publish — creates an http_deliveries row
+    client
+        .post(
+            "/v1/topics/cancel.me",
+            &serde_json::json!({ "message": { "x": 99 } }),
+        )
+        .await
+        .assert_status(201);
+
+    // Unsubscribe — CASCADE deletes http_deliveries rows
+    client
+        .delete(&format!("/v1/topics/cancel.*/subscriptions/{sub_id}"))
+        .await
+        .assert_status(204);
+
+    // Give worker a moment to see the empty table — delivery should NOT arrive
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        webhook.received_count(),
+        0,
+        "delivery should have been cancelled"
+    );
+}
+
+#[tokio::test]
+async fn test_sqs_subscriptions_unaffected_by_http_delivery() {
+    let _ = test_env();
+    let client = TestClient::new();
+
+    client
+        .post(
+            "/v1/queues",
+            &serde_json::json!({ "name": "test_http_sqs_fanout_q" }),
+        )
+        .await
+        .assert_status(201);
+
+    client
+        .post(
+            "/v1/topics/sqs.fanout.*/subscriptions",
+            &serde_json::json!({ "queue_name": "test_http_sqs_fanout_q" }),
+        )
+        .await
+        .assert_status(201);
+
+    client
+        .post(
+            "/v1/topics/sqs.fanout.event",
+            &serde_json::json!({ "message": { "data": "hello" } }),
+        )
+        .await
+        .assert_status(201);
+
+    let msgs = client
+        .get("/v1/queues/test_http_sqs_fanout_q/messages?max=1&wait=0")
+        .await
+        .assert_status(200)
+        .json::<serde_json::Value>();
+    let arr = msgs.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["message"]["data"], "hello");
+}

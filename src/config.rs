@@ -44,6 +44,18 @@ pub struct Config {
     /// Defaults to http://{address}.
     #[arg(long, env = "BASE_URL")]
     pub base_url_override: Option<String>,
+
+    /// Enable HTTP/HTTPS webhook delivery worker.
+    #[arg(long, env = "HTTP_DELIVERY_ENABLED", default_value = "true")]
+    pub http_delivery_enabled: bool,
+
+    /// Delivery worker poll interval in milliseconds.
+    #[arg(long, env = "HTTP_DELIVERY_POLL_MS", default_value = "1000")]
+    pub http_delivery_poll_ms: u64,
+
+    /// Delivery worker per-request timeout in seconds.
+    #[arg(long, env = "HTTP_DELIVERY_TIMEOUT_SECS", default_value = "5")]
+    pub http_delivery_timeout_secs: u64,
 }
 
 impl Config {

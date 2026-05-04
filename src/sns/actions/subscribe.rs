@@ -12,7 +12,8 @@ pub async fn handle(
     ctx: SnsContext,
     req: SubscribeRequest,
 ) -> Result<impl IntoResponse, SnsError> {
-    if req.protocol != "sqs" {
+    let protocol = req.protocol.as_str();
+    if !matches!(protocol, "sqs" | "http" | "https") {
         return Err(ctx.error(SnsErrorCode::InvalidParameter));
     }
 
@@ -21,21 +22,34 @@ pub async fn handle(
         .ok_or_else(|| ctx.error(SnsErrorCode::InvalidParameter))?
         .to_string();
 
-    // Extract queue name from endpoint URL (last path segment)
-    let queue_name = req
-        .endpoint
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| ctx.error(SnsErrorCode::InvalidParameter))?
-        .to_string();
+    let (endpoint, queue_name) = match protocol {
+        "sqs" => {
+            let qname = req
+                .endpoint
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ctx.error(SnsErrorCode::InvalidParameter))?
+                .to_string();
+            let ep = format!("sqs://{qname}");
+            (ep, Some(qname))
+        }
+        _ => (req.endpoint.clone(), None),
+    };
 
-    topic::subscribe(&state.pool, &topic_name, &queue_name)
-        .await
-        .map_err(|e| ctx.internal_error(e))?;
+    let sub = topic::subscribe(
+        &state.pool,
+        &topic_name,
+        protocol,
+        &endpoint,
+        queue_name.as_deref(),
+        false, // SNS wire protocol defaults to envelope delivery
+    )
+    .await
+    .map_err(|e| ctx.internal_error(e))?;
 
     Ok(ctx.ok(SubscribeResponse {
-        subscription_arn: ctx.subscription_arn(&topic_name, &queue_name),
+        subscription_arn: ctx.subscription_arn_for(&sub),
     }))
 }
