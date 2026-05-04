@@ -137,7 +137,7 @@ RETURNS TEXT AS $$
 BEGIN
     IF queue_name !~ '^[a-z0-9_]+$'
     THEN
-        RAISE EXCEPTION 'queue name contains invalid characters: must match [a-z0-9_]';
+        RAISE EXCEPTION 'queue name contains invalid characters: must match [a-z0-9_]' USING ERRCODE = 'Q0002';
     END IF;
     RETURN lower(prefix || '_' || queue_name);
 END;
@@ -147,7 +147,7 @@ CREATE FUNCTION queue.validate_queue_name(queue_name TEXT)
 RETURNS void AS $$
 BEGIN
     IF length(queue_name) > 48 THEN
-        RAISE EXCEPTION 'queue name is too long, maximum length is 48 characters';
+        RAISE EXCEPTION 'queue name is too long, maximum length is 48 characters' USING ERRCODE = 'Q0002';
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -966,6 +966,8 @@ BEGIN
     );
     RETURN QUERY EXECUTE sql USING msg, delay, headers, message_group_id, deduplication_id;
     PERFORM pg_notify('queue_' || queue_name, '');
+EXCEPTION WHEN UNDEFINED_TABLE THEN
+    RAISE EXCEPTION 'queue "%" does not exist', queue_name USING ERRCODE = 'Q0001';
 END;
 $$ LANGUAGE plpgsql;
 

@@ -24,10 +24,13 @@ pub async fn handle(
 
     let (endpoint, queue_name) = match protocol {
         "sqs" => {
-            let qname = req
-                .endpoint
-                .trim_end_matches('/')
-                .rsplit('/')
+            // Accept both URL format (https://sqs.amazonaws.com/account/queue)
+            // and ARN format (arn:aws:sqs:region:account:queue). Extract the
+            // queue name as the last segment, splitting on '/' or ':'.
+            let ep_str = req.endpoint.trim_end_matches('/');
+            let sep = if ep_str.starts_with("arn:") { ':' } else { '/' };
+            let qname = ep_str
+                .rsplit(sep)
                 .next()
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| ctx.error(SnsErrorCode::InvalidParameter))?

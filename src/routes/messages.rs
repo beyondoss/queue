@@ -130,6 +130,9 @@ pub async fn send_messages(
             ))
         }
         SendBody::Batch(reqs) => {
+            if reqs.is_empty() {
+                return Err(ApiError::BadRequest("batch cannot be empty".into()));
+            }
             let has_group_ids = reqs.iter().any(|r| r.group_id.is_some());
             if has_group_ids {
                 let mut ids = Vec::with_capacity(reqs.len());
@@ -171,28 +174,47 @@ pub async fn send_messages(
                 }
                 Ok((StatusCode::CREATED, Json(SendResponse::Batch { ids })))
             } else {
-                let has_headers = reqs.iter().any(|r| r.headers.is_some());
                 let delay = reqs.first().map(|r| r.delay).unwrap_or(0);
-                let messages: Vec<serde_json::Value> =
-                    reqs.iter().map(|r| r.message.clone()).collect();
-                let headers: Option<Vec<serde_json::Value>> = if has_headers {
-                    Some(
-                        reqs.iter()
-                            .map(|r| r.headers.clone().unwrap_or(serde_json::Value::Null))
-                            .collect(),
-                    )
+                let all_same_delay = reqs.iter().all(|r| r.delay == delay);
+                if all_same_delay {
+                    let has_headers = reqs.iter().any(|r| r.headers.is_some());
+                    let messages: Vec<serde_json::Value> =
+                        reqs.iter().map(|r| r.message.clone()).collect();
+                    let headers: Option<Vec<serde_json::Value>> = if has_headers {
+                        Some(
+                            reqs.iter()
+                                .map(|r| r.headers.clone().unwrap_or(serde_json::Value::Null))
+                                .collect(),
+                        )
+                    } else {
+                        None
+                    };
+                    let result =
+                        send::send_batch(&state.pool, &name, messages, headers, delay, sync_commit)
+                            .await?;
+                    Ok((
+                        StatusCode::CREATED,
+                        Json(SendResponse::Batch {
+                            ids: result.msg_ids,
+                        }),
+                    ))
                 } else {
-                    None
-                };
-                let result =
-                    send::send_batch(&state.pool, &name, messages, headers, delay, sync_commit)
+                    // Mixed delays — send individually to honour per-message delay values.
+                    let mut ids = Vec::with_capacity(reqs.len());
+                    for req in reqs {
+                        let r = send::send_message(
+                            &state.pool,
+                            &name,
+                            req.message,
+                            req.headers,
+                            req.delay,
+                            sync_commit,
+                        )
                         .await?;
-                Ok((
-                    StatusCode::CREATED,
-                    Json(SendResponse::Batch {
-                        ids: result.msg_ids,
-                    }),
-                ))
+                        ids.push(r.msg_id);
+                    }
+                    Ok((StatusCode::CREATED, Json(SendResponse::Batch { ids })))
+                }
             }
         }
     }

@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "Bash(SQLX_OFFLINE=true cargo check --test integration_test)",
+      "Bash(SQLX_OFFLINE=true cargo check --lib)",
+      "Bash(cargo build *)",
+      "Bash(cargo test *)"
     ]
   }
 }

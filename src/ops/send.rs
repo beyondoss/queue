@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, queue_error};
 
 pub struct SendResult {
     pub msg_id: i64,
@@ -27,7 +27,8 @@ pub async fn send_message_fifo(
         sync_commit,
     )
     .fetch_one(pool)
-    .await?;
+    .await
+    .map_err(|e| queue_error(e))?;
 
     Ok(SendResult { msg_id: row.msg_id })
 }
@@ -49,7 +50,8 @@ pub async fn send_message(
         sync_commit,
     )
     .fetch_one(pool)
-    .await?;
+    .await
+    .map_err(|e| queue_error(e))?;
 
     Ok(SendResult { msg_id: row.msg_id })
 }
@@ -75,7 +77,8 @@ pub async fn send_batch(
         sync_commit,
     )
     .fetch_all(pool)
-    .await?;
+    .await
+    .map_err(|e| queue_error(e))?;
 
     Ok(BatchSendResult {
         msg_ids: rows.into_iter().map(|r| r.msg_id).collect(),

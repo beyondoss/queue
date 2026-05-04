@@ -19,6 +19,8 @@ BEGIN
     );
     RETURN QUERY EXECUTE sql USING msg, delay, headers;
     PERFORM pg_notify('queue_' || queue_name, '');
+EXCEPTION WHEN UNDEFINED_TABLE THEN
+    RAISE EXCEPTION 'queue "%" does not exist', queue_name USING ERRCODE = 'Q0001';
 END;
 $$ LANGUAGE plpgsql;
 
@@ -90,6 +92,8 @@ BEGIN
     );
     RETURN QUERY EXECUTE sql USING msgs, delay, headers;
     PERFORM pg_notify('queue_' || queue_name, '');
+EXCEPTION WHEN UNDEFINED_TABLE THEN
+    RAISE EXCEPTION 'queue "%" does not exist', queue_name USING ERRCODE = 'Q0001';
 END;
 $$ LANGUAGE plpgsql;
 

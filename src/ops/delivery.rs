@@ -146,3 +146,17 @@ fn backoff(attempt: i32) -> chrono::Duration {
         _ => 300,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_schedule() {
+        assert_eq!(backoff(1).num_seconds(), 10);
+        assert_eq!(backoff(2).num_seconds(), 30);
+        assert_eq!(backoff(3).num_seconds(), 60);
+        assert_eq!(backoff(4).num_seconds(), 300);
+        assert_eq!(backoff(99).num_seconds(), 300);
+    }
+}

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, queue_error};
 
 pub struct QueueInfo {
     pub queue_name: String,
@@ -22,7 +22,8 @@ pub struct QueueMetrics {
 pub async fn create_queue(pool: &PgPool, queue_name: &str) -> Result<(), ApiError> {
     sqlx::query!("SELECT queue.create($1)", queue_name)
         .execute(pool)
-        .await?;
+        .await
+        .map_err(queue_error)?;
 
     Ok(())
 }
@@ -30,7 +31,8 @@ pub async fn create_queue(pool: &PgPool, queue_name: &str) -> Result<(), ApiErro
 pub async fn create_fifo_queue(pool: &PgPool, queue_name: &str) -> Result<(), ApiError> {
     sqlx::query!("SELECT queue.create_fifo($1)", queue_name)
         .execute(pool)
-        .await?;
+        .await
+        .map_err(queue_error)?;
 
     Ok(())
 }

@@ -25,8 +25,9 @@ pub async fn change_visibility(
         msg_id,
         vt_secs,
     )
-    .fetch_one(pool)
-    .await?;
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::MessageNotFound)?;
 
     Ok(VisibilityResult {
         msg_id: row.msg_id,
