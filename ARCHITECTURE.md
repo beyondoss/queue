@@ -20,14 +20,21 @@ require_auth middleware
      │
      ▼
 Router
-     ├── POST /{account_id}/{queue_name}  ┐
-     ├── POST /                           ├── sqs::router ──► detect_and_parse
-     │                                   ┘        │
-     │                                            ├── Content-Type: application/x-amz-json-1.0
-     │                                            │   X-Amz-Target: AmazonSQS.{Action} ──► SqsProtocol::Json
-     │                                            │
-     │                                            └── application/x-www-form-urlencoded
-     │                                                Action= in body ──────────────────► SqsProtocol::Query
+     ├── POST /{account_id}/{queue_name}  ──► sqs::router (path-based SQS)
+     │
+     ├── POST /  ──► gateway_handler
+     │                    │
+     │                    ├── X-Amz-Target: AmazonSNS.{Action} ──► sns::handle_service_request
+     │                    │        │
+     │                    │        ├── application/x-amz-json-1.0  ──► SnsProtocol::Json
+     │                    │        └── application/x-www-form-urlencoded ──► SnsProtocol::Query
+     │                    │
+     │                    └── (anything else) ──► sqs::handle_service_request
+     │                             │
+     │                             ├── application/x-amz-json-1.0
+     │                             │   X-Amz-Target: AmazonSQS.{Action} ──► SqsProtocol::Json
+     │                             └── application/x-www-form-urlencoded
+     │                                 Action= in body ──────────────────► SqsProtocol::Query
      │
      └── /v1/...  ──────────────────────────────────► routes::router (native REST)
 ```
@@ -135,6 +142,40 @@ The parsed body is normalized to `serde_json::Value` and dispatched to the same 
 
 FIFO queues are identified by `.fifo` suffix in the queue name (SQS convention). The suffix is stripped before hitting the database; the internal queue table name never contains `.fifo`.
 
+### SNS protocol dispatch
+
+`POST /` is shared between SQS and SNS. The `gateway_handler` in `src/lib.rs` checks the `X-Amz-Target` header prefix:
+
+- `AmazonSNS.{Action}` → `sns::handle_service_request`
+- anything else → `sqs::handle_service_request`
+
+SNS supports the same two wire formats as SQS (JSON and Query/form-encoded). Responses are SNS-shaped XML or JSON wrapped in `{Action}Response > {Action}Result` per the SNS spec.
+
+**Actions implemented:** `CreateTopic`, `DeleteTopic`, `ListTopics`, `Subscribe`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `Publish`, `GetTopicAttributes`, `SetTopicAttributes` (no-op), `GetSubscriptionAttributes`, `ConfirmSubscription` (auto-confirm).
+
+**Topics are implicit.** `CreateTopic` returns an ARN synthesized from the name (`arn:aws:sns:us-east-1:000000000000:{name}`) but stores nothing. `ListTopics` derives topic names from distinct patterns in `queue.topic_subscriptions`. `DeleteTopic` deletes all subscriptions for that pattern. This means a topic with zero subscriptions won't appear in `ListTopics` — the edge case is not worth an extra table.
+
+**Subscribe protocol restriction:** only `Protocol=sqs` is accepted. The endpoint must be a queue URL; the queue name is extracted from the last path segment.
+
+**Publish delivery:** the message is wrapped in a standard SNS notification envelope before being stored in the target queues. When a consumer calls SQS `ReceiveMessage`, the `Body` field is the JSON string of the envelope — the same format real SNS delivers:
+
+```json
+{
+  "Type": "Notification",
+  "MessageId": "uuid",
+  "TopicArn": "arn:aws:sns:us-east-1:000000000000:my-topic",
+  "Message": "the original Publish body",
+  "Timestamp": "2024-01-01T00:00:00.000Z",
+  "SignatureVersion": "1",
+  "Signature": "EXAMPLE",
+  ...
+}
+```
+
+**Subscription ARNs** encode `(topic, queue)` as `arn:aws:sns:us-east-1:000000000000:{topic}:{queue}`. Stable across restarts; `Unsubscribe` parses them back.
+
+**ARN region and account** are hardcoded to `us-east-1` / `000000000000`, matching the SQS layer. Clients round-trip ARNs; the values are never authenticated.
+
 ### Topic fanout
 
 `POST /v1/topics/{routing_key}` calls `queue.send_topic(routing_key, msg, headers, delay)`, which:
@@ -230,7 +271,7 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | Path                                    | What It Does                                                                                                                                                                                                  |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.rs`                           | Binary entry point; delegates to `beyond_queue::run()`. Sets jemalloc as allocator.                                                                                                                           |
-| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SQS layer + `/healthz`. Attaches `require_auth` to all except healthz.                                                                                                 |
+| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SNS/SQS gateway at `POST /` + SQS path handler + `/healthz`. Attaches `require_auth` to all except healthz.                                                           |
 | `src/config.rs`                         | `Config` struct parsed from CLI args / env vars via clap.                                                                                                                                                     |
 | `src/db.rs`                             | Creates `PgPool` with `max_connections`.                                                                                                                                                                      |
 | `src/middleware/auth.rs`                | Checks for presence of `Authorization` header; rejects with 403 if absent.                                                                                                                                    |
@@ -239,11 +280,16 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | `src/ops/delete.rs`                     | `queue.delete` — single and batch deletes.                                                                                                                                                                    |
 | `src/ops/visibility.rs`                 | `queue.change_visibility` — change visibility timeout by msg_id.                                                                                                                                              |
 | `src/ops/queue_admin.rs`                | `queue.create`, `queue.create_fifo`, `queue.delete_queue`, `queue.list_queues`, `queue.metrics`, `queue.purge_queue`.                                                                                         |
-| `src/ops/topic.rs`                      | `queue.send_topic` — fan-out to matching queues.                                                                                                                                                              |
+| `src/ops/topic.rs`                      | `queue.send_topic` fan-out; subscribe/unsubscribe/list ops; SNS-specific list/delete helpers.                                                                                                                 |
 | `src/routes/queues.rs`                  | `GET/POST /v1/queues`, `GET/DELETE /v1/queues/{name}`, `POST /v1/queues/{name}/purge`.                                                                                                                        |
 | `src/routes/messages.rs`                | `GET/POST/DELETE /v1/queues/{name}/messages`, `DELETE/PATCH /v1/queues/{name}/messages/{id}`.                                                                                                                 |
-| `src/routes/topics.rs`                  | `POST /v1/topics/{routing_key}`.                                                                                                                                                                              |
-| `src/sqs/mod.rs`                        | Protocol detection, action dispatch macro. Two route handlers: path-based and body-only.                                                                                                                      |
+| `src/routes/topics.rs`                  | `POST /v1/topics/{routing_key}`, subscription CRUD endpoints.                                                                                                                                                 |
+| `src/sns/mod.rs`                        | SNS service handler. Protocol detection (JSON/Query), action dispatch.                                                                                                                                        |
+| `src/sns/context.rs`                    | `SnsContext` — per-request protocol + request ID + action. ARN helpers. Serializes responses as SNS-shaped JSON or XML.                                                                                       |
+| `src/sns/types.rs`                      | Request/response structs for all SNS actions.                                                                                                                                                                 |
+| `src/sns/error.rs`                      | `SnsError` + `SnsErrorCode` — serializes to JSON or XML.                                                                                                                                                      |
+| `src/sns/actions/`                      | One file per SNS action. Each delegates to `ops/`.                                                                                                                                                            |
+| `src/sqs/mod.rs`                        | Protocol detection, action dispatch macro. Path-based route handler + `handle_service_request` called from gateway.                                                                                           |
 | `src/sqs/context.rs`                    | `SqsContext` — per-request protocol + request ID. Serializes responses as JSON or XML.                                                                                                                        |
 | `src/sqs/receipt.rs`                    | `encode`/`decode` for receipt handles: `base64url("{queue_name}\x00{msg_id}")`.                                                                                                                               |
 | `src/sqs/types.rs`                      | Request/response structs for all SQS actions.                                                                                                                                                                 |

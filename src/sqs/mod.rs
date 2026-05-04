@@ -21,7 +21,17 @@ use types::*;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/{account_id}/{queue_name}", post(queue_handler))
-        .route("/", post(service_handler))
+    // POST / is handled by the gateway in lib.rs to allow SNS/SQS co-dispatch
+}
+
+pub async fn handle_service_request(state: AppState, headers: HeaderMap, body: Bytes) -> Response {
+    let (protocol, action, parsed) = match detect_and_parse(&headers, &body) {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let base_url = state.config.base_url();
+    let ctx = SqsContext::new(protocol, base_url);
+    dispatch_action(&state, ctx, &action, parsed, protocol).await
 }
 
 async fn queue_handler(
@@ -44,22 +54,6 @@ async fn queue_handler(
         map.entry("QueueUrl")
             .or_insert_with(|| serde_json::Value::String(queue_url));
     }
-
-    dispatch_action(&state, ctx, &action, parsed, protocol).await
-}
-
-async fn service_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let (protocol, action, parsed) = match detect_and_parse(&headers, &body) {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-
-    let base_url = state.config.base_url();
-    let ctx = SqsContext::new(protocol, base_url);
 
     dispatch_action(&state, ctx, &action, parsed, protocol).await
 }

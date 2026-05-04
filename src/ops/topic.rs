@@ -131,6 +131,47 @@ pub async fn list_by_pattern(pool: &PgPool, pattern: &str) -> Result<Vec<TopicSu
         .collect())
 }
 
+/// All topic subscriptions across all patterns, ordered by pattern then queue.
+pub async fn list_all_subscriptions(pool: &PgPool) -> Result<Vec<TopicSubscription>, ApiError> {
+    let rows = sqlx::query!(
+        r#"SELECT pattern, queue_name, bound_at
+           FROM queue.topic_subscriptions
+           ORDER BY pattern, queue_name"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| TopicSubscription {
+            pattern: r.pattern,
+            queue_name: r.queue_name,
+            bound_at: r.bound_at,
+        })
+        .collect())
+}
+
+/// Distinct topic names derived from active subscriptions, for SNS ListTopics.
+pub async fn list_sns_topics(pool: &PgPool) -> Result<Vec<String>, ApiError> {
+    let rows = sqlx::query!(
+        "SELECT DISTINCT pattern FROM queue.topic_subscriptions ORDER BY pattern",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.pattern).collect())
+}
+
+/// Delete all subscriptions for a topic pattern, for SNS DeleteTopic.
+pub async fn delete_sns_topic(pool: &PgPool, pattern: &str) -> Result<(), ApiError> {
+    sqlx::query!(
+        "DELETE FROM queue.topic_subscriptions WHERE pattern = $1",
+        pattern,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// All patterns `queue_name` is bound to, ordered by pattern.
 pub async fn list_by_queue(pool: &PgPool, queue_name: &str) -> Result<Vec<TopicSubscription>, ApiError> {
     let rows = sqlx::query!(
