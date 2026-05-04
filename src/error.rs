@@ -10,6 +10,9 @@ pub enum ApiError {
     #[error("message not found")]
     MessageNotFound,
 
+    #[error("binding not found")]
+    BindingNotFound,
+
     #[error("invalid receipt handle")]
     InvalidReceiptHandle,
 
@@ -31,6 +34,7 @@ impl IntoResponse for ApiError {
                 format!("Queue '{name}' does not exist"),
             ),
             ApiError::MessageNotFound => (StatusCode::NOT_FOUND, "Message not found".into()),
+            ApiError::BindingNotFound => (StatusCode::NOT_FOUND, "Binding not found".into()),
             ApiError::InvalidReceiptHandle => {
                 (StatusCode::BAD_REQUEST, "Invalid receipt handle".into())
             }
@@ -48,4 +52,20 @@ impl IntoResponse for ApiError {
         let body = json!({ "error": message });
         (status, axum::Json(body)).into_response()
     }
+}
+
+/// Translate a PostgreSQL error from a topic binding operation into a typed ApiError.
+/// subscribe raises RAISE EXCEPTION for queue-not-found and invalid-pattern cases.
+pub fn topic_bind_error(e: sqlx::Error) -> ApiError {
+    if let sqlx::Error::Database(ref db_err) = e {
+        let msg = db_err.message();
+        if msg.contains("does not exist") {
+            // "Queue "foo" does not exist"
+            return ApiError::QueueNotFound(msg.to_string());
+        }
+        if msg.contains("invalid") || msg.contains("pattern") || msg.contains("NULL") || msg.contains("empty") {
+            return ApiError::BadRequest(msg.to_string());
+        }
+    }
+    ApiError::Database(e)
 }

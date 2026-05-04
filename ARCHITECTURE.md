@@ -140,7 +140,7 @@ FIFO queues are identified by `.fifo` suffix in the queue name (SQS convention).
 `POST /v1/topics/{routing_key}` calls `queue.send_topic(routing_key, msg, headers, delay)`, which:
 
 1. Validates the routing key (`[a-zA-Z0-9._-]+`, no leading/trailing/consecutive dots, max 255 chars).
-2. Queries `queue.topic_bindings` for all bindings where `routing_key ~ compiled_regex`.
+2. Queries `queue.topic_subscriptions` for all bindings where `routing_key ~ compiled_regex`.
 3. Calls `queue.send` once per matching queue. Returns the count of matched queues.
 
 Bindings are stored as `(pattern, queue_name)` with a stored-generated `compiled_regex` column. Pattern wildcards:
@@ -253,7 +253,7 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | `beyond-queue-extension/src/lib.rs`     | pgrx module root. Installs shared-memory hooks in `_PG_init`. Loads `schema.sql`.                                                                                                                             |
 | `beyond-queue-extension/src/queue.rs`   | Hot-path pgrx C functions: `send`, `send_batch` (and FIFO variants), `receive`, `receive_fifo`, `delete`, `archive`, `pop`, `change_visibility`.                                                              |
 | `beyond-queue-extension/src/waiter.rs`  | `WaiterRegistry` in shared memory. FNV-1a hash, 256 buckets, 4096 slots. `WaiterGuard` RAII, `notify_waiters`, `register_notify_after_commit`.                                                                |
-| `beyond-queue-extension/sql/schema.sql` | DDL for `queue.meta`, `queue.q_{name}`, `queue.a_{name}`, `queue.topic_bindings`, `queue.notify_insert_throttle`. PL/pgSQL functions: `receive_fifo`, FIFO grouped reads, topic routing, notification system. |
+| `beyond-queue-extension/sql/schema.sql` | DDL for `queue.meta`, `queue.q_{name}`, `queue.a_{name}`, `queue.topic_subscriptions`, `queue.notify_insert_throttle`. PL/pgSQL functions: `receive_fifo`, FIFO grouped reads, topic routing, notification system. |
 
 ---
 

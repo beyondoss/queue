@@ -385,7 +385,8 @@ async fn setup_topic_queues(pool: &PgPool, base: &str, n: usize) -> Result<()> {
     for i in 0..n {
         let qname = format!("{base}_{i}");
         ensure_queue(pool, &qname).await?;
-        sqlx::query(&format!("SELECT {}.bind_topic($1, $2)", sc()))
+        let sub_fn = if sc() == "pgmq" { "bind_topic" } else { "subscribe" };
+        sqlx::query(&format!("SELECT {}.{}($1, $2)", sc(), sub_fn))
             .bind(&pattern)
             .bind(&qname)
             .execute(pool)

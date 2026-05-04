@@ -59,6 +59,21 @@ Comparison against pgmq (PL/pgSQL, the upstream baseline). Both run on PostgreSQ
 
 `c=N` = concurrent workers. `b=100` = batch size. Round-trip = send + receive + delete.
 
+Topic fanout routes a single send to every queue whose binding pattern matches the routing key. The pgmq baseline uses a PL/pgSQL loop calling `queue.send()` once per bound queue. Our implementation uses a shared-memory routing cache (invalidated by trigger on `topic_subscriptions` writes) so the regex scan is skipped on every call after the first, plus datum passthrough to avoid per-queue JSON re-serialization.
+
+`n=N` = number of bound queues the routing key matches.
+
+| Scenario                  | pgmq msgs/s | ours msgs/s |     Δ | pgmq p99  | ours p99 |  Δ p99 |
+| ------------------------- | ----------: | ----------: | ----: | --------: | -------: | -----: |
+| send-topic n=1  c=1       |       1,529 |       1,676 |  +10% |  1,189 µs |   970 µs |   -18% |
+| send-topic n=4  c=1       |       1,242 |       1,445 |  +16% |  1,309 µs | 1,173 µs |   -10% |
+| send-topic n=16 c=1       |         760 |         937 |  +23% |  2,319 µs | 1,881 µs |   -19% |
+| send-topic n=4  c=8       |       5,836 |       7,360 |  +26% |  2,245 µs | 1,834 µs |   -18% |
+| send-topic n=16 c=8       |       1,839 |       7,255 | +295% | 21,375 µs | 1,888 µs |   -91% |
+| send-topic b=100 n=4  c=1 |      12,365 |      33,677 | +172% | 31,983 µs | 15,039 µs |  -53% |
+| send-topic b=100 n=16 c=1 |       5,082 |      15,133 | +198% | 151,167 µs | 21,375 µs | -86% |
+| send-topic b=100 n=4  c=8 |      14,975 |      58,105 | +288% | 175,231 µs | 26,751 µs | -85% |
+
 ```sh
 mise run bench        # quick profile
 mise run bench full   # full profile

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::ops::queue_admin;
+use crate::ops::{queue_admin, topic};
 
 #[derive(Deserialize)]
 pub struct CreateQueueRequest {
@@ -92,4 +92,14 @@ pub async fn purge_queue(
 ) -> Result<impl IntoResponse, ApiError> {
     let count = queue_admin::purge_queue(&state.pool, &name).await?;
     Ok(Json(serde_json::json!({ "deleted": count })))
+}
+
+/// GET /v1/queues/{name}/subscriptions
+/// Lists all topic patterns this queue is bound to.
+pub async fn list_subscriptions(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let bindings = topic::list_by_queue(&state.pool, &name).await?;
+    Ok(Json(bindings))
 }

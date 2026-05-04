@@ -192,24 +192,35 @@ CREATE FUNCTION queue.receive_fifo(
 LANGUAGE C VOLATILE
 AS '$libdir/libbeyond_queue_extension', 'receive_fifo_fn_wrapper';
 
--- send_topic (pgrx) — replaces TIMESTAMPTZ canonical from hot_paths.sql
+-- send_topic (pgrx) — replaces canonical from hot_paths.sql; return type changed to TABLE.
 DROP FUNCTION IF EXISTS queue.send_topic(TEXT, JSONB, JSONB, TIMESTAMP WITH TIME ZONE);
+DROP FUNCTION IF EXISTS queue.send_topic(TEXT, JSONB, JSONB, TIMESTAMP WITH TIME ZONE, BOOLEAN);
 CREATE FUNCTION queue.send_topic(
     routing_key TEXT,
     msg         JSONB,
     headers     JSONB,
-    delay       TIMESTAMP WITH TIME ZONE
-) RETURNS INTEGER
+    delay       TIMESTAMP WITH TIME ZONE,
+    sync_commit BOOLEAN DEFAULT TRUE
+) RETURNS TABLE (queue_name TEXT, msg_id BIGINT)
 LANGUAGE C VOLATILE
 AS '$libdir/libbeyond_queue_extension', 'send_topic_pgrx_wrapper';
 
--- send_batch_topic (pgrx) — replaces TIMESTAMPTZ canonical from schema.sql
+-- send_batch_topic (pgrx) — replaces TIMESTAMPTZ canonical from schema.sql; adds sync_commit.
 DROP FUNCTION IF EXISTS queue.send_batch_topic(TEXT, JSONB[], JSONB[], TIMESTAMP WITH TIME ZONE);
+DROP FUNCTION IF EXISTS queue.send_batch_topic(TEXT, JSONB[], JSONB[], TIMESTAMP WITH TIME ZONE, BOOLEAN);
 CREATE FUNCTION queue.send_batch_topic(
     routing_key TEXT,
     msgs        JSONB[],
     headers     JSONB[],
-    delay       TIMESTAMP WITH TIME ZONE
+    delay       TIMESTAMP WITH TIME ZONE,
+    sync_commit BOOLEAN DEFAULT TRUE
 ) RETURNS TABLE (queue_name TEXT, msg_id BIGINT)
 LANGUAGE C VOLATILE
 AS '$libdir/libbeyond_queue_extension', 'send_batch_topic_pgrx_wrapper';
+
+-- _invalidate_routing_cache (pgrx) — overrides the PL/pgSQL no-op from schema.sql.
+-- Called by the topic_bindings_cache_invalidate trigger on every topic_bindings write.
+CREATE OR REPLACE FUNCTION queue._invalidate_routing_cache()
+RETURNS VOID
+LANGUAGE C VOLATILE
+AS '$libdir/libbeyond_queue_extension', 'invalidate_routing_cache_fn_wrapper';

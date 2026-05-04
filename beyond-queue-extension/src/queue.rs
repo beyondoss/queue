@@ -877,17 +877,24 @@ fn validate_routing_key(routing_key: &str) {
 }
 
 /// Fanout a single message to every queue whose binding matches `routing_key`.
-/// One SPI session for routing + N inserts. msg/headers are converted to DatumWithOid
-/// once before SPI, so the JSONB datum passes through without per-queue re-serialization —
-/// unlike the PL/pgSQL path which calls queue.send() N times and pays a full
-/// datum→serde_json→datum round-trip per queue.
+///
+/// Routing results are cached in shared memory (RoutingCache). On a cache hit
+/// the topic_subscriptions query is skipped entirely; on a miss the query runs and
+/// populates the cache. Cache entries are invalidated by the AFTER trigger on
+/// queue.topic_subscriptions.
+///
+/// msg/headers are converted to DatumWithOid once before SPI so the JSONB datum
+/// passes through without per-queue re-serialization — unlike the PL/pgSQL path
+/// which calls queue.send() N times and pays a datum→serde_json→datum round-trip
+/// per queue.
 #[pg_extern(name = "send_topic", schema = "queue", volatile, parallel_safe)]
 fn send_topic_pgrx(
     routing_key: &str,
     msg: pgrx::JsonB,
     headers: Option<pgrx::JsonB>,
     delay: TimestampWithTimeZone,
-) -> i32 {
+    sync_commit: default!(bool, true),
+) -> TableIterator<'static, (name!(queue_name, String), name!(msg_id, i64))> {
     validate_routing_key(routing_key);
 
     // Convert to DatumWithOid before SPI — avoids per-queue JSON re-serialization.
@@ -897,33 +904,55 @@ fn send_topic_pgrx(
         None => DatumWithOid::null_oid(<pgrx::JsonB>::type_oid()),
     };
 
-    let queue_names: Vec<String> = Spi::connect_mut(|client| {
-        // Collect routing results first (exhausts the SPI cursor before inserting).
-        let names: Vec<String> = client
-            .select(
-                "SELECT DISTINCT queue_name FROM queue.topic_bindings \
-                 WHERE $1 ~ compiled_regex ORDER BY queue_name",
-                None,
-                &[routing_key.into()],
-            )?
-            .filter_map(|row| row.get::<&str>(1).ok().flatten().map(str::to_string))
-            .collect();
+    let (queue_names, rows) = Spi::connect_mut(|client| {
+        if !sync_commit {
+            client.update("SET LOCAL synchronous_commit = off", None, &[])?;
+        }
 
-        for name in &names {
+        // Cache hit: skip the topic_subscriptions regex scan entirely.
+        let queue_names: Vec<String> =
+            if let Some(cached) = unsafe { crate::routing_cache::lookup(routing_key) } {
+                cached
+            } else {
+                let names: Vec<String> = client
+                    .select(
+                        "SELECT DISTINCT queue_name FROM queue.topic_subscriptions \
+                         WHERE $1 ~ compiled_regex ORDER BY queue_name",
+                        None,
+                        &[routing_key.into()],
+                    )?
+                    .filter_map(|row| row.get::<&str>(1).ok().flatten().map(str::to_string))
+                    .collect();
+                unsafe { crate::routing_cache::insert(routing_key, &names) };
+                names
+            };
+
+        let mut out: Vec<(String, i64)> = Vec::with_capacity(queue_names.len());
+        for name in &queue_names {
             validate_name(name);
             let qtable = format!("queue.q_{name}");
             let sql = format!(
-                "INSERT INTO {qtable} (vt, message, headers) VALUES ($1, $2, $3)"
+                "INSERT INTO {qtable} (vt, message, headers) VALUES ($1, $2, $3) RETURNING msg_id"
             );
-            client.update(&sql, None, &[
-                delay.into(),
-                // SAFETY: datum() copies the raw pg_sys::Datum (usize) without moving the DatumWithOid.
-                unsafe { DatumWithOid::new_from_datum(msg_dow.datum(), msg_dow.oid()) },
-                unsafe { DatumWithOid::new_from_datum(hdr_dow.datum(), hdr_dow.oid()) },
-            ])?;
+            let id = client
+                .update(
+                    &sql,
+                    None,
+                    &[
+                        delay.into(),
+                        // SAFETY: datum() copies the raw pg_sys::Datum (usize) without
+                        // moving msg_dow, so we can reconstruct per iteration.
+                        unsafe { DatumWithOid::new_from_datum(msg_dow.datum(), msg_dow.oid()) },
+                        unsafe { DatumWithOid::new_from_datum(hdr_dow.datum(), hdr_dow.oid()) },
+                    ],
+                )?
+                .first()
+                .get::<i64>(1)?
+                .unwrap_or_else(|| pgrx::error!("queue.send_topic: no msg_id for {name}"));
+            out.push((name.clone(), id));
         }
 
-        Ok::<_, spi::Error>(names)
+        Ok::<_, spi::Error>((queue_names, out))
     })
     .unwrap_or_else(|e| pgrx::error!("queue.send_topic: {e}"));
 
@@ -931,7 +960,7 @@ fn send_topic_pgrx(
         unsafe { crate::waiter::register_notify_after_commit(name) };
     }
 
-    queue_names.len() as i32
+    TableIterator::new(rows.into_iter())
 }
 
 // ---------------------------------------------------------------------------
@@ -939,20 +968,15 @@ fn send_topic_pgrx(
 // ---------------------------------------------------------------------------
 
 /// Fanout a batch of messages to every queue whose binding matches `routing_key`.
-/// One SPI session: one routing scan + N inserts — no per-queue Spi::connect overhead.
+/// One SPI session: routing cache check (or query on miss) + N batch inserts.
 #[pg_extern(name = "send_batch_topic", schema = "queue", volatile, parallel_safe)]
 fn send_batch_topic_pgrx(
     routing_key: &str,
     msgs: pgrx::Array<pgrx::JsonB>,
     headers: Option<pgrx::Array<pgrx::JsonB>>,
     delay: TimestampWithTimeZone,
-) -> TableIterator<
-    'static,
-    (
-        name!(queue_name, String),
-        name!(msg_id, i64),
-    ),
-> {
+    sync_commit: default!(bool, true),
+) -> TableIterator<'static, (name!(queue_name, String), name!(msg_id, i64))> {
     validate_routing_key(routing_key);
 
     // Convert arrays to DatumWithOid before Spi::connect — arrays borrow PG memory
@@ -964,20 +988,28 @@ fn send_batch_topic_pgrx(
     };
 
     let (queue_names, rows) = Spi::connect_mut(|client| {
-        let queue_names: Vec<String> = {
-            let mut names = Vec::new();
-            for row in client.select(
-                "SELECT DISTINCT queue_name FROM queue.topic_bindings \
-                 WHERE $1 ~ compiled_regex ORDER BY queue_name",
-                None,
-                &[routing_key.into()],
-            )? {
-                if let Some(name) = row.get::<&str>(1)? {
-                    names.push(name.to_string());
+        if !sync_commit {
+            client.update("SET LOCAL synchronous_commit = off", None, &[])?;
+        }
+
+        let queue_names: Vec<String> =
+            if let Some(cached) = unsafe { crate::routing_cache::lookup(routing_key) } {
+                cached
+            } else {
+                let mut names = Vec::new();
+                for row in client.select(
+                    "SELECT DISTINCT queue_name FROM queue.topic_subscriptions \
+                     WHERE $1 ~ compiled_regex ORDER BY queue_name",
+                    None,
+                    &[routing_key.into()],
+                )? {
+                    if let Some(name) = row.get::<&str>(1)? {
+                        names.push(name.to_string());
+                    }
                 }
-            }
-            names
-        };
+                unsafe { crate::routing_cache::insert(routing_key, &names) };
+                names
+            };
 
         let mut out: Vec<(String, i64)> = Vec::new();
         for name in &queue_names {
@@ -988,13 +1020,17 @@ fn send_batch_topic_pgrx(
                  SELECT $1, unnest($2::jsonb[]), unnest(coalesce($3::jsonb[], ARRAY[]::jsonb[])) \
                  RETURNING msg_id"
             );
-            for row in client.update(&sql, None, &[
+            for row in client.update(
+                &sql,
+                None,
+                &[
                     delay.into(),
-                    // SAFETY: datum() copies the raw pg_sys::Datum (usize) without moving msgs_dow,
-                    // so we can reconstruct per iteration. new_from_datum just stores datum + oid.
+                    // SAFETY: datum() copies the raw pg_sys::Datum (usize) without moving
+                    // msgs_dow / hdrs_dow, so we can reconstruct per iteration.
                     unsafe { DatumWithOid::new_from_datum(msgs_dow.datum(), msgs_dow.oid()) },
                     unsafe { DatumWithOid::new_from_datum(hdrs_dow.datum(), hdrs_dow.oid()) },
-                ])? {
+                ],
+            )? {
                 if let Some(id) = row.get::<i64>(1)? {
                     out.push((name.clone(), id));
                 }

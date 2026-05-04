@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT queue_name AS \"queue_name!\", msg_id AS \"msg_id!\"\n           FROM queue.send_topic($1, $2::jsonb, $3::jsonb, $4::integer)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "queue_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "msg_id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "a93e490e6a1a1c3d44619cef7d2065735cf8662bd1ec793561f8cdf38e2f99d7"
+}

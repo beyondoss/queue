@@ -418,25 +418,26 @@ CREATE FUNCTION queue.send_fifo(
     SELECT * FROM queue.send_fifo(queue_name, msg, message_group_id, deduplication_id, headers, delay);
 $$;
 
--- send_topic (canonical): (TEXT, JSONB, JSONB, TIMESTAMPTZ) -> INTEGER
+-- send_topic (canonical): (TEXT, JSONB, JSONB, TIMESTAMPTZ, BOOLEAN) -> TABLE(queue_name text, msg_id bigint)
 -- PL/pgSQL stub matching the pgrx C function signature; used in tests without extension.
+-- sync_commit is ignored in the PL/pgSQL stub.
 CREATE FUNCTION queue.send_topic(
     routing_key TEXT,
     msg         JSONB,
     headers     JSONB,
-    delay       TIMESTAMP WITH TIME ZONE
-) RETURNS INTEGER AS $$
+    delay       TIMESTAMP WITH TIME ZONE,
+    sync_commit BOOLEAN DEFAULT TRUE
+) RETURNS TABLE (queue_name text, msg_id bigint) AS $$
 DECLARE
-    b             RECORD;
-    matched_count INTEGER := 0;
+    b RECORD;
 BEGIN
     FOR b IN
-        SELECT DISTINCT tb.queue_name FROM queue.topic_bindings tb
+        SELECT DISTINCT tb.queue_name FROM queue.topic_subscriptions tb
         WHERE routing_key ~ tb.compiled_regex ORDER BY tb.queue_name
     LOOP
-        PERFORM queue.send(b.queue_name, msg, headers, delay);
-        matched_count := matched_count + 1;
+        RETURN QUERY
+            SELECT b.queue_name, id
+            FROM queue.send(b.queue_name, msg, headers, delay) AS id;
     END LOOP;
-    RETURN matched_count;
 END;
 $$ LANGUAGE plpgsql;

@@ -28,10 +28,10 @@ CREATE INDEX IF NOT EXISTS idx_notify_throttle_active
     WHERE throttle_interval_ms > 0;
 
 -- Topic binding registry (wildcard routing key → queue)
-CREATE TABLE IF NOT EXISTS queue.topic_bindings (
+CREATE TABLE IF NOT EXISTS queue.topic_subscriptions (
     pattern        text NOT NULL,
     queue_name     text NOT NULL
-        CONSTRAINT topic_bindings_meta_fk
+        CONSTRAINT topic_subscriptions_meta_fk
             REFERENCES queue.meta (queue_name) ON DELETE CASCADE,
     bound_at       TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
     compiled_regex text GENERATED ALWAYS AS (
@@ -44,11 +44,11 @@ CREATE TABLE IF NOT EXISTS queue.topic_bindings (
             '#', '.*'
         ) || '$'
     ) STORED,
-    CONSTRAINT topic_bindings_unique UNIQUE (pattern, queue_name)
+    CONSTRAINT topic_subscriptions_unique UNIQUE (pattern, queue_name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_topic_bindings_covering
-    ON queue.topic_bindings (pattern)
+CREATE INDEX IF NOT EXISTS idx_topic_subscriptions_covering
+    ON queue.topic_subscriptions (pattern)
     INCLUDE (queue_name, compiled_regex);
 
 DO
@@ -57,7 +57,7 @@ BEGIN
     IF EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'beyond_queue_extension') THEN
         PERFORM pg_catalog.pg_extension_config_dump('queue.meta', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.notify_insert_throttle', '');
-        PERFORM pg_catalog.pg_extension_config_dump('queue.topic_bindings', '');
+        PERFORM pg_catalog.pg_extension_config_dump('queue.topic_subscriptions', '');
     END IF;
 END
 $$;
@@ -1213,32 +1213,32 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.bind_topic(pattern text, queue_name text)
+CREATE OR REPLACE FUNCTION queue.subscribe(pattern text, queue_name text)
 RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM queue.validate_topic_pattern(pattern);
     IF queue_name IS NULL OR queue_name = '' THEN
         RAISE EXCEPTION 'queue_name cannot be NULL or empty';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM queue.meta WHERE meta.queue_name = bind_topic.queue_name) THEN
+    IF NOT EXISTS (SELECT 1 FROM queue.meta WHERE meta.queue_name = subscribe.queue_name) THEN
         RAISE EXCEPTION 'Queue "%" does not exist', queue_name;
     END IF;
-    INSERT INTO queue.topic_bindings (pattern, queue_name)
+    INSERT INTO queue.topic_subscriptions (pattern, queue_name)
     VALUES (pattern, queue_name)
-    ON CONFLICT ON CONSTRAINT topic_bindings_unique DO NOTHING;
+    ON CONFLICT ON CONSTRAINT topic_subscriptions_unique DO NOTHING;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.unbind_topic(pattern text, queue_name text)
+CREATE OR REPLACE FUNCTION queue.unsubscribe(pattern text, queue_name text)
 RETURNS boolean LANGUAGE plpgsql AS $$
 DECLARE
     rows_deleted integer;
 BEGIN
     IF pattern IS NULL OR pattern = '' THEN RAISE EXCEPTION 'pattern cannot be NULL or empty'; END IF;
     IF queue_name IS NULL OR queue_name = '' THEN RAISE EXCEPTION 'queue_name cannot be NULL or empty'; END IF;
-    DELETE FROM queue.topic_bindings
-    WHERE topic_bindings.pattern = unbind_topic.pattern
-      AND topic_bindings.queue_name = unbind_topic.queue_name;
+    DELETE FROM queue.topic_subscriptions
+    WHERE topic_bindings.pattern = unsubscribe.pattern
+      AND topic_bindings.queue_name = unsubscribe.queue_name;
     GET DIAGNOSTICS rows_deleted = ROW_COUNT;
     RETURN rows_deleted > 0;
 END;
@@ -1251,58 +1251,63 @@ BEGIN
     PERFORM queue.validate_routing_key(routing_key);
     RETURN QUERY
         SELECT b.pattern, b.queue_name, b.compiled_regex
-        FROM queue.topic_bindings b
+        FROM queue.topic_subscriptions b
         WHERE routing_key ~ b.compiled_regex
         ORDER BY b.pattern;
 END;
 $$;
 
--- Canonical send_topic(TEXT, JSONB, JSONB, TIMESTAMPTZ) is defined in hot_paths.sql
+-- Canonical send_topic(TEXT, JSONB, JSONB, TIMESTAMPTZ, BOOLEAN) is defined in hot_paths.sql
 -- (PL/pgSQL stub) and replaced by the pgrx C function via load_pgrx_extension.sql.
--- These integer-delay wrappers delegate to it; PL/pgSQL resolves at call time.
+-- plpgsql is used so the reference to the canonical is resolved at call time, not at
+-- CREATE FUNCTION time (the canonical is loaded after this file).
 
-CREATE OR REPLACE FUNCTION queue.send_topic(routing_key text, msg jsonb, headers jsonb, delay integer)
-RETURNS integer LANGUAGE plpgsql VOLATILE AS $$
+DROP FUNCTION IF EXISTS queue.send_topic(text, jsonb, jsonb, integer);
+CREATE FUNCTION queue.send_topic(routing_key text, msg jsonb, headers jsonb, delay integer)
+RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN queue.send_topic(routing_key, msg, headers,
+    RETURN QUERY SELECT * FROM queue.send_topic(routing_key, msg, headers,
         clock_timestamp() + make_interval(secs => delay));
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.send_topic(routing_key text, msg jsonb)
-RETURNS integer LANGUAGE plpgsql VOLATILE AS $$
+DROP FUNCTION IF EXISTS queue.send_topic(text, jsonb);
+CREATE FUNCTION queue.send_topic(routing_key text, msg jsonb)
+RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN queue.send_topic(routing_key, msg, NULL::jsonb, clock_timestamp());
+    RETURN QUERY SELECT * FROM queue.send_topic(routing_key, msg, NULL::jsonb, clock_timestamp());
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.send_topic(routing_key text, msg jsonb, delay integer)
-RETURNS integer LANGUAGE plpgsql VOLATILE AS $$
+DROP FUNCTION IF EXISTS queue.send_topic(text, jsonb, integer);
+CREATE FUNCTION queue.send_topic(routing_key text, msg jsonb, delay integer)
+RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN queue.send_topic(routing_key, msg, NULL::jsonb,
+    RETURN QUERY SELECT * FROM queue.send_topic(routing_key, msg, NULL::jsonb,
         clock_timestamp() + make_interval(secs => delay));
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.list_topic_bindings()
+CREATE OR REPLACE FUNCTION queue.list_subscriptions()
 RETURNS TABLE (pattern text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, compiled_regex text)
 LANGUAGE sql STABLE AS $$
     SELECT pattern, queue_name, bound_at, compiled_regex
-    FROM queue.topic_bindings
+    FROM queue.topic_subscriptions
     ORDER BY bound_at DESC, pattern, queue_name;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.list_topic_bindings(queue_name text)
+CREATE OR REPLACE FUNCTION queue.list_subscriptions(queue_name text)
 RETURNS TABLE (pattern text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, compiled_regex text)
 LANGUAGE sql STABLE AS $$
     SELECT tb.pattern, tb.queue_name, tb.bound_at, tb.compiled_regex
-    FROM queue.topic_bindings tb
-    WHERE tb.queue_name = list_topic_bindings.queue_name
+    FROM queue.topic_subscriptions tb
+    WHERE tb.queue_name = list_subscriptions.queue_name
     ORDER BY bound_at DESC, pattern;
 $$;
 
 CREATE OR REPLACE FUNCTION queue.send_batch_topic(
-    routing_key text, msgs jsonb[], headers jsonb[], delay TIMESTAMP WITH TIME ZONE
+    routing_key text, msgs jsonb[], headers jsonb[], delay TIMESTAMP WITH TIME ZONE,
+    sync_commit boolean DEFAULT TRUE
 )
 RETURNS TABLE (queue_name text, msg_id bigint)
 LANGUAGE plpgsql VOLATILE AS $$
@@ -1312,12 +1317,12 @@ BEGIN
     PERFORM queue.validate_routing_key(routing_key);
     PERFORM queue._validate_batch_params(msgs, headers);
     FOR b IN
-        SELECT DISTINCT tb.queue_name FROM queue.topic_bindings tb
+        SELECT DISTINCT tb.queue_name FROM queue.topic_subscriptions tb
         WHERE routing_key ~ tb.compiled_regex ORDER BY tb.queue_name
     LOOP
         RETURN QUERY
         SELECT b.queue_name, batch_result.msg_id
-        FROM queue._send_batch(b.queue_name, msgs, headers, delay) AS batch_result(msg_id);
+        FROM queue._send_batch(b.queue_name, msgs, headers, delay, sync_commit) AS batch_result(msg_id);
     END LOOP;
 END;
 $$;
@@ -1341,6 +1346,41 @@ CREATE OR REPLACE FUNCTION queue.send_batch_topic(routing_key text, msgs jsonb[]
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE sql VOLATILE AS $$
     SELECT * FROM queue.send_batch_topic(routing_key, msgs, headers, clock_timestamp() + make_interval(secs => delay));
 $$;
+
+------------------------------------------------------------
+-- Routing cache invalidation
+------------------------------------------------------------
+
+-- No-op stub: overridden by the pgrx C function (routing_cache.rs) via
+-- load_pgrx_extension.sql. Defined here so the trigger can always reference it,
+-- even in environments without the pgrx extension loaded.
+CREATE OR REPLACE FUNCTION queue._invalidate_routing_cache()
+RETURNS VOID LANGUAGE plpgsql VOLATILE AS $$
+BEGIN
+END;
+$$;
+
+-- Trigger function called on every topic_bindings write.
+CREATE OR REPLACE FUNCTION queue._routing_cache_invalidate_trigger()
+RETURNS TRIGGER LANGUAGE plpgsql VOLATILE AS $$
+BEGIN
+    PERFORM queue._invalidate_routing_cache();
+    RETURN NULL;
+END;
+$$;
+
+-- AFTER statement trigger: fires once per DML statement, not once per row.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'topic_subscriptions_cache_invalidate'
+          AND tgrelid = 'queue.topic_subscriptions'::regclass
+    ) THEN
+        CREATE TRIGGER topic_subscriptions_cache_invalidate
+            AFTER INSERT OR UPDATE OR DELETE ON queue.topic_subscriptions
+            FOR EACH STATEMENT EXECUTE FUNCTION queue._routing_cache_invalidate_trigger();
+    END IF;
+END $$;
 
 ------------------------------------------------------------
 -- Grant pg_monitor read access
