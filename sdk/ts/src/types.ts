@@ -31,9 +31,18 @@ export interface Message {
 }
 
 export interface Subscription {
+  id: number;
   pattern: string;
-  queue_name: string;
+  protocol: string; // "sqs" | "http" | "https"
+  endpoint: string; // "sqs://{queue}" or webhook URL
+  queue_name: string | null; // null for HTTP subscriptions
   bound_at: string;
+  raw_delivery: boolean;
+}
+
+export interface PublishResult {
+  queues_matched: number;
+  messages: { queue_name: string; msg_id: number }[];
 }
 
 export interface CreateQueueOptions {
@@ -64,7 +73,7 @@ export interface ReceiveOptions {
   /** Long-poll wait time in seconds. Default: 0. */
   wait?: number;
   /** Visibility timeout in seconds. Default: 30. */
-  vt?: number;
+  visibilityTimeout?: number;
   /** FIFO ordering mode. Default: false. */
   fifo?: boolean;
 }

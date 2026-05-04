@@ -40,7 +40,7 @@ describe("queue management — create / list / get / delete", () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.createQueue(name);
-    const stats = await q.getQueue(name);
+    const stats = await q.getQueueStats(name);
     expect(stats.queue_length).toBeGreaterThanOrEqual(0);
     expect(stats.total_messages).toBeGreaterThanOrEqual(0);
     expect(typeof stats.scrape_time).toBe("string");
@@ -50,7 +50,9 @@ describe("queue management — create / list / get / delete", () => {
     const q = queueClient();
     // queue.metrics() runs dynamic SQL against the queue table; if it doesn't
     // exist the DB raises an error, so the server returns 500, not 404.
-    await expect(q.getQueue(uniqueQueue())).rejects.toBeInstanceOf(QueueError);
+    await expect(q.getQueueStats(uniqueQueue())).rejects.toBeInstanceOf(
+      QueueError,
+    );
   });
 
   it("deleteQueue removes the queue from listQueues", async () => {

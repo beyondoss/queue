@@ -45,7 +45,7 @@ describe("messages — send / receive / delete", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "to delete");
-    const [msg] = await q.receiveMessages(name, { vt: 1 });
+    const [msg] = await q.receiveMessages(name, { visibilityTimeout: 1 });
     await q.deleteMessage(name, msg!.id);
     // Message was deleted; after vt the queue should be empty
     await new Promise<void>((r) => setTimeout(r, 1100));
@@ -135,10 +135,10 @@ describe("messages — content types", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "reread");
-    const [first] = await q.receiveMessages(name, { vt: 1 });
+    const [first] = await q.receiveMessages(name, { visibilityTimeout: 1 });
     expect(first!.read_count).toBe(1);
     await new Promise<void>((r) => setTimeout(r, 1100));
-    const [second] = await q.receiveMessages(name, { vt: 1 });
+    const [second] = await q.receiveMessages(name, { visibilityTimeout: 1 });
     expect(second!.id).toBe(first!.id);
     expect(second!.read_count).toBe(2);
   });
@@ -150,7 +150,7 @@ describe("messages — change visibility", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "visible test");
-    const [msg] = await q.receiveMessages(name, { vt: 5 });
+    const [msg] = await q.receiveMessages(name, { visibilityTimeout: 5 });
     const result = await q.changeVisibility(name, msg!.id, 60);
     expect(result.id).toBe(msg!.id);
     expect(typeof result.visible_at).toBe("string");

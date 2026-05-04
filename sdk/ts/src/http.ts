@@ -6,6 +6,7 @@ import type {
   JsonValue,
   Message,
   PublishOptions,
+  PublishResult,
   Queue,
   QueueStats,
   ReceiveOptions,
@@ -70,8 +71,8 @@ export function createHttpQueueClient(opts: QueueClientOptions): QueueClient {
     let code = "internal_error";
     let message = res.statusText;
     try {
-      const body = (await res.json()) as { error?: string; message?: string };
-      if (body.error) code = body.error;
+      const body = (await res.json()) as { code?: string; message?: string };
+      if (body.code) code = body.code;
       if (body.message) message = body.message;
     } catch {
       /* ignore */
@@ -100,8 +101,8 @@ export function createHttpQueueClient(opts: QueueClientOptions): QueueClient {
       return (await res.json()) as Queue[];
     },
 
-    async getQueue(name: string) {
-      const res = await request("getQueue", "GET", queueUrl(name));
+    async getQueueStats(name: string) {
+      const res = await request("getQueueStats", "GET", queueUrl(name));
       if (res.status === 404) throw new QueueNotFoundError(name);
       if (!res.ok) throw await parseError(res);
       return (await res.json()) as QueueStats;
@@ -155,7 +156,9 @@ export function createHttpQueueClient(opts: QueueClientOptions): QueueClient {
       const url = new URL(`${queueUrl(queue)}/messages`);
       if (rOpts?.max != null) url.searchParams.set("max", String(rOpts.max));
       if (rOpts?.wait != null) url.searchParams.set("wait", String(rOpts.wait));
-      if (rOpts?.vt != null) url.searchParams.set("vt", String(rOpts.vt));
+      if (rOpts?.visibilityTimeout != null) {
+        url.searchParams.set("vt", String(rOpts.visibilityTimeout));
+      }
       if (rOpts?.fifo === true) url.searchParams.set("fifo", "true");
       const res = await request("receiveMessages", "GET", url.toString());
       if (!res.ok) throw await parseError(res);
@@ -183,12 +186,16 @@ export function createHttpQueueClient(opts: QueueClientOptions): QueueClient {
       return (await res.json()) as { deleted: number[] };
     },
 
-    async changeVisibility(queue: string, id: number, vt: number) {
+    async changeVisibility(
+      queue: string,
+      id: number,
+      visibilityTimeout: number,
+    ) {
       const res = await request(
         "changeVisibility",
         "PATCH",
         `${queueUrl(queue)}/messages/${id}`,
-        { vt },
+        { vt: visibilityTimeout },
       );
       if (!res.ok) throw await parseError(res);
       return (await res.json()) as { id: number; visible_at: string };
@@ -211,7 +218,7 @@ export function createHttpQueueClient(opts: QueueClientOptions): QueueClient {
         body,
       );
       if (!res.ok) throw await parseError(res);
-      return (await res.json()) as { queues_matched: number };
+      return (await res.json()) as PublishResult;
     },
 
     async subscribe(pattern: string, queueName: string) {
@@ -220,6 +227,25 @@ export function createHttpQueueClient(opts: QueueClientOptions): QueueClient {
         "POST",
         `${base}/topics/${encodeURIComponent(pattern)}/subscriptions`,
         { queue_name: queueName },
+      );
+      if (!res.ok) throw await parseError(res);
+      return (await res.json()) as Subscription;
+    },
+
+    async subscribeHttp(
+      pattern: string,
+      endpoint: string,
+      opts?: { envelope?: boolean },
+    ) {
+      const res = await request(
+        "subscribeHttp",
+        "POST",
+        `${base}/topics/${encodeURIComponent(pattern)}/subscriptions`,
+        {
+          protocol: new URL(endpoint).protocol.replace(":", ""),
+          endpoint,
+          envelope: opts?.envelope ?? false,
+        },
       );
       if (!res.ok) throw await parseError(res);
       return (await res.json()) as Subscription;
@@ -245,13 +271,11 @@ export function createHttpQueueClient(opts: QueueClientOptions): QueueClient {
       return (await res.json()) as Subscription[];
     },
 
-    async unsubscribe(pattern: string, queueName: string) {
+    async unsubscribe(subscriptionId: number) {
       const res = await request(
         "unsubscribe",
         "DELETE",
-        `${base}/topics/${encodeURIComponent(pattern)}/subscriptions/${
-          encodeURIComponent(queueName)
-        }`,
+        `${base}/topics/_/subscriptions/${subscriptionId}`,
       );
       if (res.status === 204 || res.status === 404) return;
       if (!res.ok) throw await parseError(res);

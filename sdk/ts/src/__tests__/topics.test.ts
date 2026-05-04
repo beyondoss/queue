@@ -105,17 +105,15 @@ describe("topics — subscriptions", () => {
     const qName = uniqueQueue();
     const pattern = `unsub.${qName}`;
     await q.createQueue(qName);
-    await q.subscribe(pattern, qName);
-    await q.unsubscribe(pattern, qName);
+    const sub = await q.subscribe(pattern, qName);
+    await q.unsubscribe(sub.id);
     const subs = await q.listTopicSubscriptions(pattern);
     expect(subs.some((s) => s.queue_name === qName)).toBe(false);
   });
 
   it("unsubscribe on a missing binding does not throw", async () => {
     const q = queueClient();
-    await expect(
-      q.unsubscribe(`noexist.${uniqueQueue()}`, uniqueQueue()),
-    ).resolves.toBeUndefined();
+    await expect(q.unsubscribe(999_999_999)).resolves.toBeUndefined();
   });
 
   it("after unsubscribe, publish no longer routes to the queue", async () => {
@@ -123,8 +121,8 @@ describe("topics — subscriptions", () => {
     const qName = uniqueQueue();
     const pattern = `ghost.${qName}`;
     await q.createQueue(qName);
-    await q.subscribe(pattern, qName);
-    await q.unsubscribe(pattern, qName);
+    const sub = await q.subscribe(pattern, qName);
+    await q.unsubscribe(sub.id);
     const result = await q.publish(pattern, "ghost message");
     expect(result.queues_matched).toBe(0);
   });

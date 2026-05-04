@@ -5,6 +5,7 @@ import type {
   JsonValue,
   Message,
   PublishOptions,
+  PublishResult,
   Queue,
   QueueStats,
   ReceiveOptions,
@@ -31,7 +32,7 @@ export interface QueueClient {
   ): Promise<{ queue_url: string }>;
   listQueues(): Promise<Queue[]>;
   /** Throws `QueueNotFoundError` if the queue does not exist. */
-  getQueue(name: string): Promise<QueueStats>;
+  getQueueStats(name: string): Promise<QueueStats>;
   deleteQueue(name: string): Promise<void>;
   purgeQueue(name: string): Promise<{ deleted: number }>;
 
@@ -53,7 +54,7 @@ export interface QueueClient {
   changeVisibility(
     queue: string,
     id: number,
-    vt: number,
+    visibilityTimeout: number,
   ): Promise<{ id: number; visible_at: string }>;
 
   // ── Topics & subscriptions ────────────────────────────────────────────────
@@ -61,12 +62,17 @@ export interface QueueClient {
     routingKey: string,
     message: JsonValue,
     opts?: PublishOptions,
-  ): Promise<{ queues_matched: number }>;
+  ): Promise<PublishResult>;
   subscribe(pattern: string, queueName: string): Promise<Subscription>;
+  subscribeHttp(
+    pattern: string,
+    endpoint: string,
+    opts?: { envelope?: boolean },
+  ): Promise<Subscription>;
   listTopicSubscriptions(pattern: string): Promise<Subscription[]>;
   listQueueSubscriptions(queueName: string): Promise<Subscription[]>;
-  /** No-op (resolves) if the binding does not exist. */
-  unsubscribe(pattern: string, queueName: string): Promise<void>;
+  /** No-op (resolves) if the subscription does not exist. */
+  unsubscribe(subscriptionId: number): Promise<void>;
 
   /** Release underlying connections. Call when the client is no longer needed. */
   close(): Promise<void>;

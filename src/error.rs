@@ -28,28 +28,47 @@ pub enum ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
+        let (status, code, message) = match &self {
             ApiError::QueueNotFound(name) => (
                 StatusCode::NOT_FOUND,
+                "queue_not_found",
                 format!("Queue '{name}' does not exist"),
             ),
-            ApiError::MessageNotFound => (StatusCode::NOT_FOUND, "Message not found".into()),
-            ApiError::BindingNotFound => (StatusCode::NOT_FOUND, "Binding not found".into()),
-            ApiError::InvalidReceiptHandle => {
-                (StatusCode::BAD_REQUEST, "Invalid receipt handle".into())
-            }
-            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            ApiError::MessageNotFound => (
+                StatusCode::NOT_FOUND,
+                "message_not_found",
+                "Message not found".into(),
+            ),
+            ApiError::BindingNotFound => (
+                StatusCode::NOT_FOUND,
+                "binding_not_found",
+                "Binding not found".into(),
+            ),
+            ApiError::InvalidReceiptHandle => (
+                StatusCode::BAD_REQUEST,
+                "invalid_receipt_handle",
+                "Invalid receipt handle".into(),
+            ),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.clone()),
             ApiError::Database(e) => {
                 tracing::error!("database error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Database error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "Database error".into(),
+                )
             }
             ApiError::Internal(e) => {
                 tracing::error!("internal error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "Internal error".into(),
+                )
             }
         };
 
-        let body = json!({ "error": message });
+        let body = json!({ "code": code, "message": message });
         (status, axum::Json(body)).into_response()
     }
 }

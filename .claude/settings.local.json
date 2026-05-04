@@ -5,7 +5,11 @@
       "Bash(SQLX_OFFLINE=true cargo check --test integration_test)",
       "Bash(SQLX_OFFLINE=true cargo check --lib)",
       "Bash(cargo build *)",
-      "Bash(cargo test *)"
+      "Bash(cargo test *)",
+      "Skill(jtbd)",
+      "Skill(jtbd:*)",
+      "Read(//Users/jared/Code/Apps/beyond/kv/sdk/ts/src/**)",
+      "Read(//Users/jared/Code/Apps/beyond/auth/sdk/ts/src/**)"
     ]
   }
 }

@@ -12,6 +12,7 @@ export type {
   JsonValue,
   Message,
   PublishOptions,
+  PublishResult,
   Queue,
   QueueStats,
   ReceiveOptions,
