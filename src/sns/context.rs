@@ -46,11 +46,13 @@ impl SnsContext {
             SnsProtocol::Json => {
                 ([("content-type", "application/x-amz-json-1.0")], Json(body)).into_response()
             }
-            SnsProtocol::Query => {
-                let inner = serde_json::to_value(&body).unwrap_or(serde_json::Value::Null);
-                let xml = sns_xml_response(&inner, &self.action, &self.request_id);
-                ([("content-type", "text/xml")], xml).into_response()
-            }
+            SnsProtocol::Query => match serde_json::to_value(&body) {
+                Ok(inner) => {
+                    let xml = sns_xml_response(&inner, &self.action, &self.request_id);
+                    ([("content-type", "text/xml")], xml).into_response()
+                }
+                Err(e) => self.internal_error(e).into_response(),
+            },
         }
     }
 
@@ -105,6 +107,7 @@ impl SnsContext {
     pub fn parse_subscription_arn(&self, arn: &str) -> Option<(String, String)> {
         // arn:aws:sns:region:account:topic:queue  (7 colon-separated parts)
         let parts: Vec<&str> = arn.splitn(8, ':').collect();
+        // parts[5] and parts[6] are valid: the len() >= 7 check above guarantees it.
         if parts.len() >= 7 {
             Some((parts[5].to_string(), parts[6].to_string()))
         } else {
@@ -161,6 +164,7 @@ fn append_xml_field(xml: &mut String, key: &str, val: &serde_json::Value, depth:
             if key == "Attributes" {
                 // SNS attribute maps use <entry><key>/<value> pairs.
                 for (k, v) in m {
+                    // Non-string attribute values (numbers, booleans) become their JSON text form.
                     let text = v
                         .as_str()
                         .map(|s| s.to_string())
@@ -184,6 +188,7 @@ fn append_xml_field(xml: &mut String, key: &str, val: &serde_json::Value, depth:
         }
         serde_json::Value::Null => {}
         _ => {
+            // Non-string scalar values (numbers, booleans) become their JSON text form.
             let text = val
                 .as_str()
                 .map(|s| s.to_string())

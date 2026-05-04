@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 use super::send::{send_batch, send_message};
 use crate::error::ApiError;
@@ -54,10 +55,10 @@ impl Coalescer {
 /// message is flushed immediately after the first one arrives, which still
 /// allows multiple in-flight messages to be grouped if they arrived before the
 /// flush began).
-pub fn start(pool: PgPool, linger_ms: u64) -> Coalescer {
+pub fn start(pool: PgPool, linger_ms: u64) -> (Coalescer, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<PendingMessage>(16_384);
-    tokio::spawn(run(pool, rx, linger_ms));
-    Coalescer(tx)
+    let handle = tokio::spawn(run(pool, rx, linger_ms));
+    (Coalescer(tx), handle)
 }
 
 // ---------------------------------------------------------------------------

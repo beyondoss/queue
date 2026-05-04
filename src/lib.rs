@@ -78,23 +78,27 @@ pub async fn run() -> anyhow::Result<()> {
 
     let pool = db::connect(&config.database_url, config.max_connections).await?;
 
+    let mut _coalescer_handle = None;
     let coalescer = if config.linger_ms > 0 {
         tracing::info!(linger_ms = config.linger_ms, "write coalescer enabled");
-        Some(ops::coalesce::start(pool.clone(), config.linger_ms))
+        let (c, h) = ops::coalesce::start(pool.clone(), config.linger_ms);
+        _coalescer_handle = Some(h);
+        Some(c)
     } else {
         None
     };
 
+    let mut _delivery_handle = None;
     if config.http_delivery_enabled {
         tracing::info!("HTTP delivery worker enabled");
-        ops::delivery::start(
+        _delivery_handle = Some(ops::delivery::start(
             pool.clone(),
             ops::delivery::DeliveryConfig {
                 poll_interval_ms: config.http_delivery_poll_ms,
                 delivery_timeout_secs: config.http_delivery_timeout_secs,
                 batch_size: 50,
             },
-        );
+        )?);
     }
 
     let signer = Arc::new(Signer::generate());

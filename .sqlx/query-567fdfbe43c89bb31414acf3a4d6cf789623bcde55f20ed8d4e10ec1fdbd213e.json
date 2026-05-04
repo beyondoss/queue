@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue.http_deliveries SET next_attempt_at = $1 WHERE id = ANY($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "567fdfbe43c89bb31414acf3a4d6cf789623bcde55f20ed8d4e10ec1fdbd213e"
+}

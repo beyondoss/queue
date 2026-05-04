@@ -540,6 +540,13 @@ BEGIN
         qtable || '_grpvt_idx', qtable
     );
 
+    -- Partial unique index for deduplication_id. NULL dedup IDs are excluded so
+    -- the common case (no deduplication_id) is free of index overhead.
+    EXECUTE FORMAT(
+        $Q$ CREATE UNIQUE INDEX IF NOT EXISTS %I ON queue.%I (message_group_id, deduplication_id) WHERE deduplication_id IS NOT NULL $Q$,
+        qtable || '_dedup_idx', qtable
+    );
+
     EXECUTE FORMAT(
         $Q$ CREATE INDEX IF NOT EXISTS %I ON queue.%I (archived_at) $Q$,
         'archived_at_idx_' || queue_name, atable
@@ -951,6 +958,8 @@ BEGIN
         $Q$
         INSERT INTO queue.%I (vt, message, headers, message_group_id, deduplication_id)
         VALUES ($2, $1, $3, $4, $5)
+        ON CONFLICT (message_group_id, deduplication_id) WHERE deduplication_id IS NOT NULL
+        DO UPDATE SET deduplication_id = EXCLUDED.deduplication_id
         RETURNING msg_id;
         $Q$,
         qtable

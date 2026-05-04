@@ -78,12 +78,8 @@ pub async fn delete_queue(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let dropped = queue_admin::delete_queue(&state.pool, &name).await?;
-    if dropped {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::QueueNotFound(name))
-    }
+    queue_admin::delete_queue(&state.pool, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn purge_queue(

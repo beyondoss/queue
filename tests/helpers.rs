@@ -177,6 +177,36 @@ impl TestClient {
         .await
     }
 
+    /// Send a request using the SQS JSON wire protocol.
+    pub async fn sqs<B: serde::Serialize>(&self, action: &str, body: &B) -> TestResponse {
+        TestResponse::from(
+            self.inner
+                .post(&self.base_url)
+                .header(reqwest::header::AUTHORIZATION, "Bearer test")
+                .header("content-type", "application/x-amz-json-1.0")
+                .header("x-amz-target", format!("AmazonSQS.{action}"))
+                .json(body)
+                .send()
+                .await
+                .expect("SQS JSON action"),
+        )
+        .await
+    }
+
+    /// Send a request using the SQS Query (form-urlencoded) wire protocol.
+    pub async fn sqs_query(&self, params: &[(&str, &str)]) -> TestResponse {
+        TestResponse::from(
+            self.inner
+                .post(&self.base_url)
+                .header(reqwest::header::AUTHORIZATION, "Bearer test")
+                .form(params)
+                .send()
+                .await
+                .expect("SQS Query action"),
+        )
+        .await
+    }
+
     /// Send a request using the SNS JSON wire protocol.
     pub async fn sns<B: serde::Serialize>(&self, action: &str, body: &B) -> TestResponse {
         TestResponse::from(
