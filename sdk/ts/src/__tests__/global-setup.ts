@@ -63,7 +63,7 @@ export async function setup(): Promise<void> {
   const binaryPath = process.env["BEYOND_QUEUE_BINARY"]
     ?? resolve(__dirname, "../../../../target/debug/beyond-queue");
 
-  serverProcess = spawn(binaryPath, [], {
+  serverProcess = spawn(binaryPath, ["serve"], {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,

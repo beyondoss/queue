@@ -17,4 +17,3 @@ export {
   type SendOptions,
   type Subscription,
 } from "./client.js";
-export { QueueError, QueueNotFoundError } from "./errors.js";

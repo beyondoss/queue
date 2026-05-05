@@ -7,8 +7,8 @@ describe("messages — send / receive / delete", () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.createQueue(name);
-    const result = await q.sendMessage(name, "hello");
-    expect(typeof result.id).toBe("number");
+    const { data } = await q.sendMessage(name, "hello");
+    expect(typeof data?.id).toBe("number");
   });
 
   it("receiveMessages returns the sent message", async () => {
@@ -16,16 +16,16 @@ describe("messages — send / receive / delete", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "test message");
-    const messages = await q.receiveMessages(name);
+    const { data: messages } = await q.receiveMessages(name);
     expect(messages).toHaveLength(1);
-    expect(messages[0]!.message).toBe("test message");
+    expect(messages![0]!.message).toBe("test message");
   });
 
   it("receiveMessages returns an empty array when the queue is empty", async () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.createQueue(name);
-    const messages = await q.receiveMessages(name);
+    const { data: messages } = await q.receiveMessages(name);
     expect(messages).toHaveLength(0);
   });
 
@@ -36,7 +36,7 @@ describe("messages — send / receive / delete", () => {
     await q.sendBatch(name, [{ message: "a" }, { message: "b" }, {
       message: "c",
     }]);
-    const messages = await q.receiveMessages(name, { max: 3 });
+    const { data: messages } = await q.receiveMessages(name, { max: 3 });
     expect(messages).toHaveLength(3);
   });
 
@@ -45,19 +45,21 @@ describe("messages — send / receive / delete", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "to delete");
-    const [msg] = await q.receiveMessages(name, { visibilityTimeout: 1 });
-    await q.deleteMessage(name, msg!.id);
+    const { data: msgs } = await q.receiveMessages(name, { visibilityTimeout: 1 });
+    await q.deleteMessage(name, msgs![0]!.id);
     // Message was deleted; after vt the queue should be empty
     await new Promise<void>((r) => setTimeout(r, 1100));
-    const after = await q.receiveMessages(name, { max: 1 });
+    const { data: after } = await q.receiveMessages(name, { max: 1 });
     expect(after).toHaveLength(0);
   });
 
-  it("deleteMessage on a missing id does not throw", async () => {
+  it("deleteMessage on a missing id returns no error", async () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.createQueue(name);
-    await expect(q.deleteMessage(name, 999_999_999)).resolves.toBeUndefined();
+    const { data, error } = await q.deleteMessage(name, 999_999_999);
+    expect(data).toBeUndefined();
+    expect(error).toBeUndefined();
   });
 
   it("deleteMessages removes multiple messages and returns their ids", async () => {
@@ -65,10 +67,10 @@ describe("messages — send / receive / delete", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendBatch(name, [{ message: "x" }, { message: "y" }]);
-    const received = await q.receiveMessages(name, { max: 2 });
-    const ids = received.map((m) => m.id);
-    const result = await q.deleteMessages(name, ids);
-    expect(result.deleted).toEqual(expect.arrayContaining(ids));
+    const { data: received } = await q.receiveMessages(name, { max: 2 });
+    const ids = received!.map((m) => m.id);
+    const { data } = await q.deleteMessages(name, ids);
+    expect(data?.deleted).toEqual(expect.arrayContaining(ids));
   });
 });
 
@@ -77,13 +79,13 @@ describe("messages — sendBatch", () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.createQueue(name);
-    const result = await q.sendBatch(name, [
+    const { data } = await q.sendBatch(name, [
       { message: "one" },
       { message: "two" },
       { message: "three" },
     ]);
-    expect(result.ids).toHaveLength(3);
-    expect(result.ids.every((id) => typeof id === "number")).toBe(true);
+    expect(data?.ids).toHaveLength(3);
+    expect(data?.ids.every((id) => typeof id === "number")).toBe(true);
   });
 });
 
@@ -94,8 +96,8 @@ describe("messages — content types", () => {
     await q.createQueue(name);
     const payload = { key: "value", count: 42, nested: { ok: true } };
     await q.sendMessage(name, payload);
-    const [msg] = await q.receiveMessages(name);
-    expect(msg!.message).toEqual(payload);
+    const { data: msgs } = await q.receiveMessages(name);
+    expect(msgs![0]!.message).toEqual(payload);
   });
 
   it("sends and receives a JSON array", async () => {
@@ -103,8 +105,8 @@ describe("messages — content types", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, [1, 2, 3]);
-    const [msg] = await q.receiveMessages(name);
-    expect(msg!.message).toEqual([1, 2, 3]);
+    const { data: msgs } = await q.receiveMessages(name);
+    expect(msgs![0]!.message).toEqual([1, 2, 3]);
   });
 
   it("sends and receives with headers", async () => {
@@ -112,8 +114,8 @@ describe("messages — content types", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "body", { headers: { "x-trace-id": "abc123" } });
-    const [msg] = await q.receiveMessages(name);
-    expect((msg!.headers as Record<string, string>)["x-trace-id"]).toBe(
+    const { data: msgs } = await q.receiveMessages(name);
+    expect((msgs![0]!.headers as Record<string, string>)["x-trace-id"]).toBe(
       "abc123",
     );
   });
@@ -123,11 +125,12 @@ describe("messages — content types", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "shaped");
-    const [msg] = await q.receiveMessages(name);
-    expect(typeof msg!.id).toBe("number");
-    expect(typeof msg!.read_count).toBe("number");
-    expect(typeof msg!.enqueued_at).toBe("string");
-    expect(typeof msg!.visible_at).toBe("string");
+    const { data: msgs } = await q.receiveMessages(name);
+    const msg = msgs![0]!;
+    expect(typeof msg.id).toBe("number");
+    expect(typeof msg.read_count).toBe("number");
+    expect(typeof msg.enqueued_at).toBe("string");
+    expect(typeof msg.visible_at).toBe("string");
   });
 
   it("read_count increments on each receive after vt expiry", async () => {
@@ -135,12 +138,16 @@ describe("messages — content types", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "reread");
-    const [first] = await q.receiveMessages(name, { visibilityTimeout: 1 });
-    expect(first!.read_count).toBe(1);
+    const { data: first } = await q.receiveMessages(name, {
+      visibilityTimeout: 1,
+    });
+    expect(first![0]!.read_count).toBe(1);
     await new Promise<void>((r) => setTimeout(r, 1100));
-    const [second] = await q.receiveMessages(name, { visibilityTimeout: 1 });
-    expect(second!.id).toBe(first!.id);
-    expect(second!.read_count).toBe(2);
+    const { data: second } = await q.receiveMessages(name, {
+      visibilityTimeout: 1,
+    });
+    expect(second![0]!.id).toBe(first![0]!.id);
+    expect(second![0]!.read_count).toBe(2);
   });
 });
 
@@ -150,10 +157,10 @@ describe("messages — change visibility", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "visible test");
-    const [msg] = await q.receiveMessages(name, { visibilityTimeout: 5 });
-    const result = await q.changeVisibility(name, msg!.id, 60);
-    expect(result.id).toBe(msg!.id);
-    expect(typeof result.visible_at).toBe("string");
+    const { data: msgs } = await q.receiveMessages(name, { visibilityTimeout: 5 });
+    const { data } = await q.changeVisibility(name, msgs![0]!.id, 60);
+    expect(data?.id).toBe(msgs![0]!.id);
+    expect(typeof data?.visible_at).toBe("string");
   });
 });
 
@@ -163,7 +170,7 @@ describe("messages — delay", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "delayed", { delay: 10 });
-    const messages = await q.receiveMessages(name);
+    const { data: messages } = await q.receiveMessages(name);
     expect(messages).toHaveLength(0);
   });
 });

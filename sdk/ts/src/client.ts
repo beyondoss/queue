@@ -1,5 +1,4 @@
 import createFetchClient from "openapi-fetch";
-import { QueueError, QueueNotFoundError } from "./errors.js";
 import type { components, paths } from "./types.js";
 
 export type { components, operations, paths } from "./types.js";
@@ -73,70 +72,72 @@ export interface QueueClientOptions {
   onResponse?: (event: QueueResponseEvent) => void;
 }
 
+type ApiError = components["schemas"]["ErrorResponse"];
+
+type ApiResult<T = undefined> = Promise<{
+  data: T | undefined;
+  error: ApiError | undefined;
+  response: Response;
+}>;
+
 export interface QueueClient {
   // ── Queue management ──────────────────────────────────────────────────────
   createQueue(
     name: string,
     opts?: CreateQueueOptions,
-  ): Promise<{ queue_url: string }>;
-  listQueues(): Promise<Queue[]>;
-  /** Throws `QueueNotFoundError` if the queue does not exist. */
-  getQueueStats(name: string): Promise<QueueStats>;
-  deleteQueue(name: string): Promise<void>;
-  purgeQueue(name: string): Promise<components["schemas"]["PurgeResponse"]>;
+  ): ApiResult<{ queue_url: string }>;
+  listQueues(): ApiResult<Queue[]>;
+  getQueueStats(name: string): ApiResult<QueueStats>;
+  deleteQueue(name: string): ApiResult;
+  purgeQueue(name: string): ApiResult<components["schemas"]["PurgeResponse"]>;
 
   // ── Messages ──────────────────────────────────────────────────────────────
   sendMessage(
     queue: string,
     message: JsonValue,
     opts?: SendOptions,
-  ): Promise<{ id: number }>;
+  ): ApiResult<{ id: number }>;
   sendBatch(
     queue: string,
     entries: BatchEntry[],
     opts?: { async_commit?: boolean },
-  ): Promise<{ ids: number[] }>;
-  receiveMessages(queue: string, opts?: ReceiveOptions): Promise<Message[]>;
-  /** No-op (resolves) if the message id does not exist. */
-  deleteMessage(queue: string, id: number): Promise<void>;
+  ): ApiResult<{ ids: number[] }>;
+  receiveMessages(queue: string, opts?: ReceiveOptions): ApiResult<Message[]>;
+  deleteMessage(queue: string, id: number): ApiResult;
   deleteMessages(
     queue: string,
     ids: number[],
-  ): Promise<components["schemas"]["DeletedResponse"]>;
+  ): ApiResult<components["schemas"]["DeletedResponse"]>;
   changeVisibility(
     queue: string,
     id: number,
     visibilityTimeout: number,
-  ): Promise<components["schemas"]["ChangeVisibilityResponse"]>;
+  ): ApiResult<components["schemas"]["ChangeVisibilityResponse"]>;
 
   // ── Topics & subscriptions ────────────────────────────────────────────────
   publish(
     routingKey: string,
     message: JsonValue,
     opts?: PublishOptions,
-  ): Promise<PublishResult>;
-  subscribe(pattern: string, queueName: string): Promise<Subscription>;
+  ): ApiResult<PublishResult>;
+  subscribe(pattern: string, queueName: string): ApiResult<Subscription>;
   subscribeHttp(
     pattern: string,
     endpoint: string,
     opts?: { envelope?: boolean },
-  ): Promise<Subscription>;
-  listTopicSubscriptions(pattern: string): Promise<Subscription[]>;
-  listQueueSubscriptions(queueName: string): Promise<Subscription[]>;
-  /** No-op (resolves) if the subscription does not exist. */
-  unsubscribe(subscriptionId: number): Promise<void>;
+  ): ApiResult<Subscription>;
+  listTopicSubscriptions(pattern: string): ApiResult<Subscription[]>;
+  listQueueSubscriptions(queueName: string): ApiResult<Subscription[]>;
+  unsubscribe(subscriptionId: number): ApiResult;
 
   /** Release underlying connections. Call when the client is no longer needed. */
   close(): Promise<void>;
 }
 
-function throwError(error: unknown, response: Response): never {
-  const e = error as components["schemas"]["ErrorResponse"] | undefined;
-  throw new QueueError(
-    e?.code ?? "internal_error",
-    e?.message ?? response.statusText,
-    response.status,
-  );
+function wrap<T, E>(
+  promise: Promise<{ data?: T; error?: E; response: Response }>,
+): Promise<{ data: T | undefined; error: E | undefined; response: Response }> {
+  return promise.then(({ data, error, response }) => ({ data, error, response }));
 }
 
 function buildFetch(
@@ -203,42 +204,33 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
       const { error, response } = await client.POST("/v1/queues", {
         body: { name, fifo: qOpts?.fifo ?? false },
       });
-      if (error) throwError(error, response);
-      return { queue_url: `${base}/v1/queues/${encodeURIComponent(name)}` };
+      if (error) return { data: undefined, error, response };
+      return {
+        data: { queue_url: `${base}/v1/queues/${encodeURIComponent(name)}` },
+        error: undefined,
+        response,
+      };
     }),
 
-    listQueues: cmd("listQueues", async () => {
-      const { data, error, response } = await client.GET("/v1/queues", {});
-      if (error) throwError(error, response);
-      return data!;
-    }),
+    listQueues: cmd("listQueues", () => wrap(client.GET("/v1/queues", {}))),
 
-    getQueueStats: cmd("getQueueStats", async (name) => {
-      const { data, error, response } = await client.GET("/v1/queues/{name}", {
-        params: { path: { name } },
-      });
-      if (error) {
-        if (response.status === 404) throw new QueueNotFoundError(name);
-        throwError(error, response);
-      }
-      return data!;
-    }),
+    getQueueStats: cmd("getQueueStats", (name) =>
+      wrap(
+        client.GET("/v1/queues/{name}", { params: { path: { name } } }),
+      )),
 
     deleteQueue: cmd("deleteQueue", async (name) => {
       const { error, response } = await client.DELETE("/v1/queues/{name}", {
         params: { path: { name } },
       });
-      if (error && response.status !== 404) throwError(error, response);
+      if (error && response.status !== 404) return { data: undefined, error, response };
+      return { data: undefined, error: undefined, response };
     }),
 
-    purgeQueue: cmd("purgeQueue", async (name) => {
-      const { data, error, response } = await client.POST(
-        "/v1/queues/{name}/purge",
-        { params: { path: { name } } },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+    purgeQueue: cmd("purgeQueue", (name) =>
+      wrap(
+        client.POST("/v1/queues/{name}/purge", { params: { path: { name } } }),
+      )),
 
     sendMessage: cmd("sendMessage", async (queue, message, sOpts) => {
       const { data, error, response } = await client.POST(
@@ -256,8 +248,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           },
         },
       );
-      if (error) throwError(error, response);
-      return data! as { id: number };
+      return { data: data as { id: number } | undefined, error, response };
     }),
 
     sendBatch: cmd("sendBatch", async (queue, entries, bOpts) => {
@@ -271,14 +262,12 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           body: entries,
         },
       );
-      if (error) throwError(error, response);
-      return data! as { ids: number[] };
+      return { data: data as { ids: number[] } | undefined, error, response };
     }),
 
-    receiveMessages: cmd("receiveMessages", async (queue, rOpts) => {
-      const { data, error, response } = await client.GET(
-        "/v1/queues/{name}/messages",
-        {
+    receiveMessages: cmd("receiveMessages", (queue, rOpts) =>
+      wrap(
+        client.GET("/v1/queues/{name}/messages", {
           params: {
             path: { name: queue },
             query: {
@@ -289,115 +278,87 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
               ...(rOpts?.fifo !== undefined && { fifo: rOpts.fifo }),
             },
           },
-        },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+        }),
+      )),
 
     deleteMessage: cmd("deleteMessage", async (queue, id) => {
       const { error, response } = await client.DELETE(
         "/v1/queues/{name}/messages/{id}",
         { params: { path: { name: queue, id } } },
       );
-      if (error && response.status !== 404) throwError(error, response);
+      if (error && response.status !== 404) return { data: undefined, error, response };
+      return { data: undefined, error: undefined, response };
     }),
 
-    deleteMessages: cmd("deleteMessages", async (queue, ids) => {
-      const { data, error, response } = await client.DELETE(
-        "/v1/queues/{name}/messages",
-        {
+    deleteMessages: cmd("deleteMessages", (queue, ids) =>
+      wrap(
+        client.DELETE("/v1/queues/{name}/messages", {
           params: { path: { name: queue } },
           body: { ids },
-        },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+        }),
+      )),
 
-    changeVisibility: cmd(
-      "changeVisibility",
-      async (queue, id, visibilityTimeout) => {
-        const { data, error, response } = await client.PATCH(
-          "/v1/queues/{name}/messages/{id}",
-          {
-            params: { path: { name: queue, id } },
-            body: { vt: visibilityTimeout },
-          },
-        );
-        if (error) throwError(error, response);
-        return data!;
-      },
-    ),
+    changeVisibility: cmd("changeVisibility", (queue, id, visibilityTimeout) =>
+      wrap(
+        client.PATCH("/v1/queues/{name}/messages/{id}", {
+          params: { path: { name: queue, id } },
+          body: { vt: visibilityTimeout },
+        }),
+      )),
 
-    publish: cmd("publish", async (routingKey, message, pOpts) => {
-      const { data, error, response } = await client.POST(
-        "/v1/topics/{routing_key}",
-        {
+    publish: cmd("publish", (routingKey, message, pOpts) =>
+      wrap(
+        client.POST("/v1/topics/{routing_key}", {
           params: { path: { routing_key: routingKey } },
           body: {
             message,
             delay: pOpts?.delay ?? 0,
             ...(pOpts?.headers !== undefined && { headers: pOpts.headers }),
           },
-        },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+        }),
+      )),
 
-    subscribe: cmd("subscribe", async (pattern, queueName) => {
-      const { data, error, response } = await client.POST(
-        "/v1/topics/{pattern}/subscriptions",
-        {
+    subscribe: cmd("subscribe", (pattern, queueName) =>
+      wrap(
+        client.POST("/v1/topics/{pattern}/subscriptions", {
           params: { path: { pattern } },
           body: { queue_name: queueName },
-        },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+        }),
+      )),
 
-    subscribeHttp: cmd("subscribeHttp", async (pattern, endpoint, sOpts) => {
-      const { data, error, response } = await client.POST(
-        "/v1/topics/{pattern}/subscriptions",
-        {
+    subscribeHttp: cmd("subscribeHttp", (pattern, endpoint, sOpts) =>
+      wrap(
+        client.POST("/v1/topics/{pattern}/subscriptions", {
           params: { path: { pattern } },
           body: {
             protocol: new URL(endpoint).protocol.replace(":", ""),
             endpoint,
             envelope: sOpts?.envelope ?? false,
           },
-        },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+        }),
+      )),
 
-    listTopicSubscriptions: cmd("listTopicSubscriptions", async (pattern) => {
-      const { data, error, response } = await client.GET(
-        "/v1/topics/{pattern}/subscriptions",
-        { params: { path: { pattern } } },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+    listTopicSubscriptions: cmd("listTopicSubscriptions", (pattern) =>
+      wrap(
+        client.GET("/v1/topics/{pattern}/subscriptions", {
+          params: { path: { pattern } },
+        }),
+      )),
 
-    listQueueSubscriptions: cmd("listQueueSubscriptions", async (queueName) => {
-      const { data, error, response } = await client.GET(
-        "/v1/queues/{name}/subscriptions",
-        { params: { path: { name: queueName } } },
-      );
-      if (error) throwError(error, response);
-      return data!;
-    }),
+    listQueueSubscriptions: cmd("listQueueSubscriptions", (queueName) =>
+      wrap(
+        client.GET("/v1/queues/{name}/subscriptions", {
+          params: { path: { name: queueName } },
+        }),
+      )),
 
     unsubscribe: cmd("unsubscribe", async (subscriptionId) => {
       const { error, response } = await client.DELETE(
         "/v1/topics/{pattern}/subscriptions/{id}",
         { params: { path: { pattern: "_", id: subscriptionId } } },
       );
-      if (error && response.status !== 404) throwError(error, response);
+      if (error && response.status !== 404) return { data: undefined, error, response };
+      return { data: undefined, error: undefined, response };
     }),
 
     close: () => Promise.resolve(),
