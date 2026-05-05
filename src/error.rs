@@ -3,9 +3,12 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::json;
 
+/// Wire-format error body returned on all non-2xx responses.
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct ErrorResponse {
+    /// Machine-readable error code, e.g. `"queue_not_found"`, `"bad_request"`.
     pub code: String,
+    /// Human-readable description of the error.
     pub message: String,
 }
 

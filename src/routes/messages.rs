@@ -8,19 +8,36 @@ use crate::AppState;
 use crate::error::{ApiError, ErrorResponse};
 use crate::ops::{delete, receive, send, visibility};
 
+/// A single message to enqueue.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct SendRequest {
+    /// Message body. Any JSON value: object, array, string, number, or boolean.
+    #[schema(value_type = Object)]
     pub message: serde_json::Value,
+    /// Optional key-value metadata to attach to the message. Any JSON object. Delivered
+    /// alongside the body on receive.
+    #[schema(nullable, value_type = Object)]
     pub headers: Option<serde_json::Value>,
+    /// Delivery delay in seconds. The message becomes visible to receivers after this
+    /// many seconds. Default: `0` (immediately visible).
     #[serde(default)]
     pub delay: i32,
+    /// FIFO group identifier. Messages with the same `group_id` are delivered in strict
+    /// enqueue order. Requires a FIFO queue. All messages in a batch must include a
+    /// `group_id` if any do.
+    #[schema(nullable)]
     pub group_id: Option<String>,
 }
 
+/// Request body for send — either a single message object or a JSON array for batch
+/// sends. The shape is detected automatically: a JSON object is a single send, a JSON
+/// array is a batch.
 #[derive(Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum SendBody {
+    /// Send a single message.
     Single(SendRequest),
+    /// Send multiple messages in one request.
     Batch(Vec<SendRequest>),
 }
 
@@ -32,11 +49,22 @@ pub struct SendQuery {
     pub async_commit: bool,
 }
 
+/// Send response — mirrors the request shape.
+/// Single sends return `{ "id": <i64> }`;
+/// batch sends return `{ "ids": [<i64>, ...] }`.
 #[derive(Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum SendResponse {
-    Single { id: i64 },
-    Batch { ids: Vec<i64> },
+    /// Result of a single-message send.
+    Single {
+        /// Assigned message ID.
+        id: i64,
+    },
+    /// Result of a batch send.
+    Batch {
+        /// Assigned message IDs, in the same order as the request array.
+        ids: Vec<i64>,
+    },
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
@@ -44,13 +72,17 @@ pub struct ReceiveQuery {
     /// Maximum number of messages to return. Default: 1.
     #[serde(default = "default_max")]
     pub max: i32,
-    /// Long-poll wait time in seconds. Default: 0 (no wait).
+    /// Long-poll wait time in seconds. The call blocks until a message arrives or the
+    /// timeout elapses. Default: 0 (no wait — returns immediately).
     #[serde(default)]
     pub wait: i32,
-    /// Visibility timeout in seconds. Default: 30.
+    /// Visibility timeout in seconds. Received messages are hidden from other consumers
+    /// for this duration. Delete the message before it elapses to prevent re-delivery.
+    /// Default: 30.
     #[serde(default = "default_vt")]
     pub vt: i32,
-    /// Return messages in FIFO order within a group. Default: false.
+    /// Return messages in FIFO order within each `group_id`. Only applies to FIFO
+    /// queues. Default: false.
     #[serde(default)]
     pub fifo: bool,
 }
@@ -63,50 +95,80 @@ fn default_vt() -> i32 {
     30
 }
 
+/// A received message.
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct MessageResponse {
+    /// Message ID. Use this to delete or extend the visibility of the message.
     pub id: i64,
+    /// How many times this message has been delivered. Starts at `1` on first delivery.
+    /// A value greater than `1` indicates a prior consumer did not delete the message
+    /// before its visibility timeout expired.
     pub read_count: i32,
+    /// Timestamp when the message was added to the queue.
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    /// Timestamp after which the message becomes visible again if not deleted. Extends
+    /// on each `PATCH /v1/queues/{name}/messages/{id}` call.
     pub visible_at: chrono::DateTime<chrono::Utc>,
+    /// Message body as originally sent.
+    #[schema(value_type = Object)]
     pub message: serde_json::Value,
+    /// Metadata attached at send time. `null` when none was provided.
+    #[schema(nullable, value_type = Object)]
     pub headers: Option<serde_json::Value>,
 }
 
+/// Request body to extend or reduce a message's visibility timeout.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct ChangeVisibilityRequest {
+    /// New visibility timeout in seconds from now. The message will not be returned by
+    /// receive calls until this duration elapses. Set to `0` to make the message
+    /// immediately visible.
     pub vt: i32,
 }
 
+/// Confirmation of a visibility timeout change.
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct ChangeVisibilityResponse {
+    /// Message ID.
     pub id: i64,
+    /// Updated timestamp after which the message becomes visible again.
     pub visible_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Request body for batch message deletion.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct DeleteBatchRequest {
+    /// IDs of messages to delete. Non-existent IDs are silently skipped.
     pub ids: Vec<i64>,
 }
 
+/// Result of a batch delete operation.
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct DeletedResponse {
+    /// IDs of the messages that were actually deleted.
     pub deleted: Vec<i64>,
 }
 
+/// Send one or more messages to a queue. The body is either a single message object or
+/// a JSON array of message objects — the shape is detected automatically.
+///
+/// Batch sends with a uniform `delay` value are committed in a single statement for
+/// maximum throughput. Set `async_commit=true` to skip WAL fsync for best-effort,
+/// high-speed sends at the cost of crash durability.
 #[utoipa::path(
     post,
     path = "/v1/queues/{name}/messages",
+    operation_id = "send_messages",
     tag = "messages",
     params(
-        ("name" = String, Path, description = "Queue name"),
+        ("name" = String, Path, description = "Queue name."),
         SendQuery,
     ),
     request_body = SendBody,
     responses(
-        (status = 201, body = SendResponse),
-        (status = 400, body = ErrorResponse),
-        (status = 404, body = ErrorResponse),
+        (status = 201, body = SendResponse, description = "Message(s) enqueued. Single send returns `{\"id\": <n>}`; batch send returns `{\"ids\": [...]}`." ),
+        (status = 400, body = ErrorResponse, description = "Invalid request body or parameters."),
+        (status = 404, body = ErrorResponse, description = "Queue does not exist."),
     )
 )]
 pub async fn send_messages(
@@ -250,17 +312,23 @@ pub async fn send_messages(
     }
 }
 
+/// Receive up to `max` messages from a queue. Received messages are hidden from other
+/// consumers for `vt` seconds (visibility timeout). Delete them after processing to
+/// prevent re-delivery. If `wait` > 0 and the queue is empty, the call long-polls for
+/// up to that many seconds before returning an empty array. Set `fifo=true` to receive
+/// messages in strict enqueue order within each `group_id`.
 #[utoipa::path(
     get,
     path = "/v1/queues/{name}/messages",
+    operation_id = "receive_messages",
     tag = "messages",
     params(
-        ("name" = String, Path, description = "Queue name"),
+        ("name" = String, Path, description = "Queue name."),
         ReceiveQuery,
     ),
     responses(
-        (status = 200, body = [MessageResponse]),
-        (status = 404, body = ErrorResponse),
+        (status = 200, body = [MessageResponse], description = "Up to `max` messages. Empty array when the queue is empty or the long-poll wait expires."),
+        (status = 404, body = ErrorResponse, description = "Queue does not exist."),
     )
 )]
 pub async fn receive_messages(
@@ -288,17 +356,20 @@ pub async fn receive_messages(
     Ok(Json(response))
 }
 
+/// Acknowledge and permanently delete a single message. Safe to call multiple times —
+/// returns 404 if the message has already been deleted or never existed.
 #[utoipa::path(
     delete,
     path = "/v1/queues/{name}/messages/{id}",
+    operation_id = "delete_message",
     tag = "messages",
     params(
-        ("name" = String, Path, description = "Queue name"),
-        ("id" = i64, Path, description = "Message ID"),
+        ("name" = String, Path, description = "Queue name."),
+        ("id" = i64, Path, description = "Message ID returned by send or receive."),
     ),
     responses(
-        (status = 204, description = "Message deleted"),
-        (status = 404, body = ErrorResponse),
+        (status = 204, description = "Message deleted."),
+        (status = 404, body = ErrorResponse, description = "Message does not exist."),
     )
 )]
 pub async fn delete_message(
@@ -313,17 +384,20 @@ pub async fn delete_message(
     }
 }
 
+/// Acknowledge and delete multiple messages in one request. Non-existent IDs are
+/// silently ignored. The response lists only the IDs that were actually deleted.
 #[utoipa::path(
     delete,
     path = "/v1/queues/{name}/messages",
+    operation_id = "delete_batch",
     tag = "messages",
     params(
-        ("name" = String, Path, description = "Queue name"),
+        ("name" = String, Path, description = "Queue name."),
     ),
     request_body = DeleteBatchRequest,
     responses(
-        (status = 200, body = DeletedResponse),
-        (status = 404, body = ErrorResponse),
+        (status = 200, body = DeletedResponse, description = "IDs of messages that were deleted."),
+        (status = 404, body = ErrorResponse, description = "Queue does not exist."),
     )
 )]
 pub async fn delete_batch(
@@ -335,18 +409,22 @@ pub async fn delete_batch(
     Ok(Json(DeletedResponse { deleted }))
 }
 
+/// Extend or reduce the visibility timeout of an in-flight message. Use this to
+/// prevent re-delivery when processing takes longer than the original `vt`, or to
+/// make a message immediately visible again by setting `vt=0`.
 #[utoipa::path(
     patch,
     path = "/v1/queues/{name}/messages/{id}",
+    operation_id = "change_visibility",
     tag = "messages",
     params(
-        ("name" = String, Path, description = "Queue name"),
-        ("id" = i64, Path, description = "Message ID"),
+        ("name" = String, Path, description = "Queue name."),
+        ("id" = i64, Path, description = "Message ID returned by receive."),
     ),
     request_body = ChangeVisibilityRequest,
     responses(
-        (status = 200, body = ChangeVisibilityResponse),
-        (status = 404, body = ErrorResponse),
+        (status = 200, body = ChangeVisibilityResponse, description = "Updated visibility window."),
+        (status = 404, body = ErrorResponse, description = "Message does not exist."),
     )
 )]
 pub async fn change_visibility(

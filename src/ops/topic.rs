@@ -8,9 +8,12 @@ use crate::error::{ApiError, topic_bind_error};
 // send_topic
 // ---------------------------------------------------------------------------
 
+/// A message enqueued in a single matched queue as a result of a topic publish.
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct TopicMessage {
+    /// Name of the queue that received the message.
     pub queue_name: String,
+    /// Assigned message ID within that queue.
     pub msg_id: i64,
 }
 
@@ -77,14 +80,27 @@ pub async fn queue_http_deliveries(
 // bindings
 // ---------------------------------------------------------------------------
 
+/// A topic subscription record.
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct TopicSubscription {
+    /// Subscription ID. Use this to unsubscribe via `DELETE /v1/topics/{pattern}/subscriptions/{id}`.
     pub id: i64,
+    /// Glob pattern matched against routing keys at publish time.
     pub pattern: String,
+    /// Delivery protocol: `"sqs"` for internal queue delivery, `"http"` or `"https"` for
+    /// webhook delivery.
     pub protocol: String,
+    /// Delivery endpoint. `sqs://<queue_name>` for queue subscriptions; the HTTP/HTTPS URL
+    /// for webhook subscriptions.
     pub endpoint: String,
+    /// Name of the target queue. Present only for `sqs` protocol subscriptions; `null` for
+    /// HTTP/HTTPS webhook subscriptions.
+    #[schema(nullable)]
     pub queue_name: Option<String>,
+    /// Timestamp when the subscription was created.
     pub bound_at: DateTime<Utc>,
+    /// `true` when the message payload is delivered as-is (raw); `false` when wrapped in an
+    /// SNS-compatible notification envelope.
     pub raw_delivery: bool,
 }
 
