@@ -137,7 +137,11 @@ export interface QueueClient {
 function wrap<T, E>(
   promise: Promise<{ data?: T; error?: E; response: Response }>,
 ): Promise<{ data: T | undefined; error: E | undefined; response: Response }> {
-  return promise.then(({ data, error, response }) => ({ data, error, response }));
+  return promise.then(({ data, error, response }) => ({
+    data,
+    error,
+    response,
+  }));
 }
 
 function buildFetch(
@@ -214,16 +218,19 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
 
     listQueues: cmd("listQueues", () => wrap(client.GET("/v1/queues", {}))),
 
-    getQueueStats: cmd("getQueueStats", (name) =>
-      wrap(
-        client.GET("/v1/queues/{name}", { params: { path: { name } } }),
-      )),
+    getQueueStats: cmd(
+      "getQueueStats",
+      (name) =>
+        wrap(client.GET("/v1/queues/{name}", { params: { path: { name } } })),
+    ),
 
     deleteQueue: cmd("deleteQueue", async (name) => {
       const { error, response } = await client.DELETE("/v1/queues/{name}", {
         params: { path: { name } },
       });
-      if (error && response.status !== 404) return { data: undefined, error, response };
+      if (error && response.status !== 404) {
+        return { data: undefined, error, response };
+      }
       return { data: undefined, error: undefined, response };
     }),
 
@@ -273,8 +280,9 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
             query: {
               ...(rOpts?.max !== undefined && { max: rOpts.max }),
               ...(rOpts?.wait !== undefined && { wait: rOpts.wait }),
-              ...(rOpts?.visibilityTimeout !== undefined
-                && { vt: rOpts.visibilityTimeout }),
+              ...(rOpts?.visibilityTimeout !== undefined && {
+                vt: rOpts.visibilityTimeout,
+              }),
               ...(rOpts?.fifo !== undefined && { fifo: rOpts.fifo }),
             },
           },
@@ -286,7 +294,9 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         "/v1/queues/{name}/messages/{id}",
         { params: { path: { name: queue, id } } },
       );
-      if (error && response.status !== 404) return { data: undefined, error, response };
+      if (error && response.status !== 404) {
+        return { data: undefined, error, response };
+      }
       return { data: undefined, error: undefined, response };
     }),
 
@@ -298,13 +308,16 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         }),
       )),
 
-    changeVisibility: cmd("changeVisibility", (queue, id, visibilityTimeout) =>
-      wrap(
-        client.PATCH("/v1/queues/{name}/messages/{id}", {
-          params: { path: { name: queue, id } },
-          body: { vt: visibilityTimeout },
-        }),
-      )),
+    changeVisibility: cmd(
+      "changeVisibility",
+      (queue, id, visibilityTimeout) =>
+        wrap(
+          client.PATCH("/v1/queues/{name}/messages/{id}", {
+            params: { path: { name: queue, id } },
+            body: { vt: visibilityTimeout },
+          }),
+        ),
+    ),
 
     publish: cmd("publish", (routingKey, message, pOpts) =>
       wrap(
@@ -357,7 +370,9 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         "/v1/topics/{pattern}/subscriptions/{id}",
         { params: { path: { pattern: "_", id: subscriptionId } } },
       );
-      if (error && response.status !== 404) return { data: undefined, error, response };
+      if (error && response.status !== 404) {
+        return { data: undefined, error, response };
+      }
       return { data: undefined, error: undefined, response };
     }),
 

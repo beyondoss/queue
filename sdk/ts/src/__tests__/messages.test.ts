@@ -45,7 +45,9 @@ describe("messages — send / receive / delete", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "to delete");
-    const { data: msgs } = await q.receiveMessages(name, { visibilityTimeout: 1 });
+    const { data: msgs } = await q.receiveMessages(name, {
+      visibilityTimeout: 1,
+    });
     await q.deleteMessage(name, msgs![0]!.id);
     // Message was deleted; after vt the queue should be empty
     await new Promise<void>((r) => setTimeout(r, 1100));
@@ -157,7 +159,9 @@ describe("messages — change visibility", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     await q.sendMessage(name, "visible test");
-    const { data: msgs } = await q.receiveMessages(name, { visibilityTimeout: 5 });
+    const { data: msgs } = await q.receiveMessages(name, {
+      visibilityTimeout: 5,
+    });
     const { data } = await q.changeVisibility(name, msgs![0]!.id, 60);
     expect(data?.id).toBe(msgs![0]!.id);
     expect(typeof data?.visible_at).toBe("string");
