@@ -40,3 +40,4 @@ pnpm-debug.log*
 Thumbs.db
 .wiki
 .mcp.json
+.claude
