@@ -46,7 +46,8 @@ To build the pgrx extension for testing locally (requires PostgreSQL 17 dev head
 
 ```sh
 mise run extension:build          # native build (requires local pg_config)
-mise run extension:build:linux    # cross-compile for linux/arm64 in Docker
+mise run extension:build:linux:arm64    # cross-compile for linux/arm64 in Docker
+mise run extension:build:linux:amd64    # cross-compile for linux/amd64 in Docker
 ```
 
 ## System Design

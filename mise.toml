@@ -9,10 +9,13 @@ cargo-binstall = "latest"
 [tasks."openapi:generate"]
 run = "cargo run -- generate-openapi"
 
-[tasks."sdk:generate-types"]
+[tasks."sdk:ts:generate-types"]
 run = ["cd ts && node scripts/generate-types.mjs"]
 dir = "sdk"
 depends = ["openapi:generate"]
+
+[tasks."test:all"]
+depends = ["test:unit", "test", "sdk:ts:test"]
 
 [tasks."build"]
 run = "cargo build"
@@ -53,7 +56,7 @@ run = "PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release -p beyond-qu
 
 # Build the pgrx extension .so for linux/amd64 (postgres:18, glibc/Debian).
 # Output: target/release/libbeyond_queue_extension.so
-[tasks."extension:build:linux"]
+[tasks."extension:build:linux:amd64"]
 run = """
 docker run --rm --platform linux/amd64 \
   -v "$(pwd)":/src \
@@ -65,6 +68,25 @@ docker run --rm --platform linux/amd64 \
     . "$HOME/.cargo/env" &&
     PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release --no-default-features --features pg18 -p beyond-queue-extension --manifest-path /src/beyond-queue-extension/Cargo.toml --target-dir /src/target 2>&1 &&
     echo "Built: /src/target/release/libbeyond_queue_extension.so"
+  '
+"""
+
+# Build the pgrx extension .so for linux/arm64 (postgres:18, Apple Silicon / Graviton).
+# Output: target/aarch64-unknown-linux-gnu/release/libbeyond_queue_extension.so
+[tasks."extension:build:linux:arm64"]
+run = """
+docker run --rm --platform linux/arm64 \
+  -v "$(pwd)":/src \
+  -e DEBIAN_FRONTEND=noninteractive \
+  postgres:18 /bin/sh -c '
+    apt-get update -qq 2>/dev/null &&
+    apt-get install -y -qq curl pkg-config libssl-dev build-essential libclang-dev clang postgresql-server-dev-18 2>/dev/null &&
+    curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92 --profile minimal --quiet 2>&1 | tail -2 &&
+    . "$HOME/.cargo/env" &&
+    PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release --no-default-features --features pg18 -p beyond-queue-extension --manifest-path /src/beyond-queue-extension/Cargo.toml --target-dir /src/target 2>&1 &&
+    mkdir -p /src/target/aarch64-unknown-linux-gnu/release &&
+    cp /src/target/release/libbeyond_queue_extension.so /src/target/aarch64-unknown-linux-gnu/release/libbeyond_queue_extension.so &&
+    echo "Built: /src/target/aarch64-unknown-linux-gnu/release/libbeyond_queue_extension.so"
   '
 """
 
