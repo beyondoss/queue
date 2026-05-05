@@ -3,47 +3,69 @@ on:
   push:
     tags:
       - "ext-v*"
+env:
+  CARGO_TERM_COLOR: always
+permissions:
+  contents: write
 jobs:
   build:
-    name: Build pg${{ matrix.pg }} / ${{ matrix.target }}
-    runs-on: ubuntu-latest
     strategy:
       matrix:
-        pg: [17, 18]
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+            pg: 17
+          - os: ubuntu-latest
+            arch: amd64
+            pg: 18
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            pg: 17
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            pg: 18
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Install pgrx build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-server-dev-${{ matrix.pg }} \
-            gcc-aarch64-linux-gnu
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-pgrx
-        run: cargo install cargo-pgrx --version "=0.18.0"
-      - name: Build extension
+      - name: install postgres dev headers
         run: |
-          cargo pgrx package -p pgmq-extension --features pg${{ matrix.pg }} \
-            --pg-config $(which pg_config)
+          sudo apt-get install -y gnupg2 lsb-release
+          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-server-dev-${{ matrix.pg }} libclang-dev clang
+      - name: build extension
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-      - name: Upload .so
-        uses: actions/upload-artifact@v4
+          PGRX_PG_CONFIG_PATH: /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+        run: |
+          cargo build --release --no-default-features --features pg${{ matrix.pg }} \
+            -p beyond-queue-extension
+      - name: package
+        run: |
+          VERSION=${GITHUB_REF_NAME#ext-v}
+          tar -czf beyond-queue-extension-v${VERSION}-pg${{ matrix.pg }}-linux-${{ matrix.arch }}.tar.gz \
+            -C target/release libbeyond_queue_extension.so
+      - uses: actions/upload-artifact@v7
         with:
-          name: pgmq-extension-pg${{ matrix.pg }}-${{ matrix.target }}
-          path: target/release/pgmq-extension-pg${{ matrix.pg }}/**
+          name: extension-pg${{ matrix.pg }}-${{ matrix.arch }}
+          path: beyond-queue-extension-*.tar.gz
   release:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/download-artifact@v8
         with:
-          files: pgmq-extension-*/**
+          merge-multiple: true
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            beyond-queue-extension-*.tar.gz

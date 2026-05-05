@@ -64,8 +64,8 @@ pub fn test_env() -> &'static TestEnv {
                     .await
                     .expect("connect to test postgres");
 
-                let schema_sql = include_str!("../beyond-queue-extension/sql/schema.sql");
-                let hot_paths_sql = include_str!("fixtures/hot_paths.sql");
+                let schema_sql = include_str!("../../beyond-queue-extension/sql/schema.sql");
+                let hot_paths_sql = include_str!("../fixtures/hot_paths.sql");
 
                 sqlx::raw_sql(schema_sql)
                     .execute(&pool)

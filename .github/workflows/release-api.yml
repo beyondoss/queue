@@ -3,51 +3,49 @@ on:
   push:
     tags:
       - "api-v*"
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: "true"
+permissions:
+  contents: write
 jobs:
   build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            artifact: pgmq-rx-linux-amd64
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            artifact: pgmq-rx-linux-arm64
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
-      - name: Install musl tools
-        run: sudo apt-get install -y musl-tools
-      - name: Install cross
-        run: cargo install cross
-      - name: Build
-        run: cross build --release --bin pgmq-rx --target ${{ matrix.target }}
-        env:
-          SQLX_OFFLINE: "true"
-      - name: Rename artifact
-        run: cp target/${{ matrix.target }}/release/pgmq-rx ${{ matrix.artifact }}
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: build
+        run: cargo build --release --bin beyond-queue
+      - name: package
+        run: |
+          VERSION=${GITHUB_REF_NAME#api-v}
+          tar -czf beyond-queue-v${VERSION}-linux-${{ matrix.arch }}.tar.gz \
+            -C target/release beyond-queue
+      - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: binary-${{ matrix.arch }}
+          path: beyond-queue-*.tar.gz
   release:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/download-artifact@v8
         with:
-          files: |
-            pgmq-rx-linux-amd64/pgmq-rx-linux-amd64
-            pgmq-rx-linux-arm64/pgmq-rx-linux-arm64
+          merge-multiple: true
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            beyond-queue-*.tar.gz

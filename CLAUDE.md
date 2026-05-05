@@ -36,10 +36,10 @@ cache (`.sqlx/`). CI runs with `SQLX_OFFLINE=true`.
 We use mise for running development tasks.
 
 ```sh
-mise tasks          # list all tasks
-mise run build      # cargo build
-mise run test       # integration tests
-mise run format     # dprint fmt
+mise tasks                    # list all tasks
+mise run build:rs             # cargo build
+mise run test:integration:rs  # integration tests
+mise run format               # dprint fmt
 ```
 
 To build the pgrx extension for testing locally (requires PostgreSQL 17 dev headers):

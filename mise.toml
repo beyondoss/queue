@@ -5,32 +5,55 @@ yamlfmt = "latest"
 cargo-binstall = "latest"
 "cargo:sqlx-cli" = "latest"
 "cargo:cross" = "latest"
+node = "lts"
 
-[tasks."openapi:generate"]
-run = "cargo run -- generate-openapi"
-
-[tasks."sdk:ts:generate-types"]
-run = ["cd ts && node scripts/generate-types.mjs"]
-dir = "sdk"
-depends = ["openapi:generate"]
-
-[tasks."test:all"]
-depends = ["test:unit", "test", "test:ts"]
-
-[tasks."build"]
+[tasks."build:rs"]
 run = "cargo build"
 
-[tasks."build:release"]
+[tasks."build:rs:release"]
 run = "cargo build --release"
+
+[tasks."build:ts"]
+run = "npm run build"
+dir = "sdk/ts"
+depends = ["generate:types"]
+
+[tasks."check:rs"]
+run = "cargo clippy --workspace -- -D warnings"
+
+[tasks."check:ts"]
+run = "npm run typecheck"
+dir = "sdk/ts"
+depends = ["generate:types"]
+
+[tasks."check:fmt"]
+run = "dprint check"
 
 [tasks."format"]
 run = "dprint fmt"
 
-[tasks."test"]
+[tasks."install:ts"]
+run = "npm ci"
+dir = "sdk/ts"
+
+[tasks."test:unit:rs"]
+run = "cargo test --lib"
+
+[tasks."test:integration:rs"]
 run = "cargo test --test integration_test"
 
-[tasks."test:unit"]
-run = "cargo test --lib"
+[tasks."test:integration:ts"]
+run = "npm test"
+dir = "sdk/ts"
+depends = ["generate:types", "build:rs"]
+
+[tasks."generate:openapi"]
+run = "cargo run -- generate-openapi"
+
+[tasks."generate:types"]
+run = ["cd ts && node scripts/generate-types.mjs"]
+dir = "sdk"
+depends = ["install:ts", "generate:openapi"]
 
 [tasks."sqlx:prepare"]
 run = """
@@ -95,6 +118,12 @@ docker run --rm --platform linux/arm64 \
 # Usage: mise run bench            → quick profile
 #        mise run bench full       → full profile
 #        mise run bench quick fifo → quick profile, FIFO bench
+[tasks."bench:quick"]
+run = "mise run bench quick"
+
+[tasks."bench:full"]
+run = "mise run bench full"
+
 [tasks."bench"]
 run = """
 #!/usr/bin/env bash
