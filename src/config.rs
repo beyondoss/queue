@@ -1,7 +1,6 @@
-use clap::Parser;
+use clap::Args;
 
-#[derive(Debug, Clone, Parser)]
-#[command(name = "beyond-queue")]
+#[derive(Debug, Clone, Args)]
 pub struct Config {
     /// PostgreSQL connection string.
     #[arg(long, env = "DATABASE_URL")]

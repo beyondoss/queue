@@ -6,6 +6,14 @@ cargo-binstall = "latest"
 "cargo:sqlx-cli" = "latest"
 "cargo:cross" = "latest"
 
+[tasks."openapi:generate"]
+run = "cargo run -- generate-openapi"
+
+[tasks."sdk:generate-types"]
+run = ["cd ts && node scripts/generate-types.mjs"]
+dir = "sdk"
+depends = ["openapi:generate"]
+
 [tasks."build"]
 run = "cargo build"
 

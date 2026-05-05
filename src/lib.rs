@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -19,7 +20,6 @@ use axum::http::HeaderMap;
 use axum::middleware::from_fn;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use clap::Parser;
 use sqlx::PgPool;
 use tracing_subscriber::EnvFilter;
 
@@ -71,9 +71,7 @@ pub fn parse_service_body(
     }
 }
 
-pub async fn run() -> anyhow::Result<()> {
-    let config = Config::parse();
-
+pub async fn serve(config: Config) -> anyhow::Result<()> {
     init_tracing(&config);
 
     let pool = db::connect(&config.database_url, config.max_connections).await?;
@@ -171,8 +169,18 @@ async fn gateway_handler(
 }
 
 pub fn build_router(state: AppState) -> Router {
+    use axum::Json;
+    use routes::ApiDoc;
+    use utoipa::OpenApi;
+
+    let openapi = ApiDoc::openapi();
+
     let api = Router::new()
         .nest("/v1", routes::router())
+        .route(
+            "/v1/openapi.json",
+            get(move || async move { Json(openapi) }),
+        )
         .route("/", post(gateway_handler))
         .merge(sqs::router())
         .layer(from_fn(middleware::auth::require_auth));

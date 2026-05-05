@@ -46,6 +46,7 @@ tower-http = { version = "0.6", features = ["catch-panic", "request-id", "timeou
 tracing = "0.1"
 tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

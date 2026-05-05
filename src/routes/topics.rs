@@ -3,18 +3,19 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorResponse};
 use crate::ops::topic;
+use crate::ops::topic::{TopicMessage, TopicSubscription};
 
 // ---------------------------------------------------------------------------
 // send
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct TopicSendRequest {
     pub message: serde_json::Value,
     pub headers: Option<serde_json::Value>,
@@ -22,6 +23,25 @@ pub struct TopicSendRequest {
     pub delay: i32,
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct TopicSendResponse {
+    pub queues_matched: i64,
+    pub messages: Vec<TopicMessage>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/topics/{routing_key}",
+    tag = "topics",
+    params(
+        ("routing_key" = String, Path, description = "Routing key / topic name"),
+    ),
+    request_body = TopicSendRequest,
+    responses(
+        (status = 201, body = TopicSendResponse),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn send_topic(
     State(state): State<AppState>,
     Path(routing_key): Path<String>,
@@ -57,10 +77,10 @@ pub async fn send_topic(
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({
-            "queues_matched": result.queues_matched(),
-            "messages": result.messages,
-        })),
+        Json(TopicSendResponse {
+            queues_matched: result.queues_matched() as i64,
+            messages: result.messages,
+        }),
     ))
 }
 
@@ -68,20 +88,31 @@ pub async fn send_topic(
 // bindings
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SubscribeRequest {
     // SQS form
     pub queue_name: Option<String>,
     // HTTP/HTTPS form
     pub protocol: Option<String>,
     pub endpoint: Option<String>,
-    // Opt-in to SNS notification envelope; default false means raw payload delivery
+    /// Opt-in to SNS notification envelope; default false means raw payload delivery.
     #[serde(default)]
     pub envelope: bool,
 }
 
-/// POST /v1/topics/{pattern}/subscriptions
-/// Binds a queue or HTTP endpoint to a topic pattern. Idempotent.
+#[utoipa::path(
+    post,
+    path = "/v1/topics/{pattern}/subscriptions",
+    tag = "topics",
+    params(
+        ("pattern" = String, Path, description = "Topic pattern (glob)"),
+    ),
+    request_body = SubscribeRequest,
+    responses(
+        (status = 201, body = TopicSubscription),
+        (status = 400, body = ErrorResponse),
+    )
+)]
 pub async fn subscribe_queue(
     State(state): State<AppState>,
     Path(pattern): Path<String>,
@@ -116,8 +147,19 @@ pub async fn subscribe_queue(
     Ok((StatusCode::CREATED, Json(binding)))
 }
 
-/// DELETE /v1/topics/{pattern}/subscriptions/{id}
-/// Removes a subscription by id. Returns 404 if not found.
+#[utoipa::path(
+    delete,
+    path = "/v1/topics/{pattern}/subscriptions/{id}",
+    tag = "topics",
+    params(
+        ("pattern" = String, Path, description = "Topic pattern (glob)"),
+        ("id" = i64, Path, description = "Subscription ID"),
+    ),
+    responses(
+        (status = 204, description = "Subscription removed"),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn unsubscribe_queue(
     State(state): State<AppState>,
     Path((pattern, id)): Path<(String, i64)>,
@@ -127,8 +169,18 @@ pub async fn unsubscribe_queue(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// GET /v1/topics/{pattern}/subscriptions
-/// Lists all subscriptions bound to this pattern.
+#[utoipa::path(
+    get,
+    path = "/v1/topics/{pattern}/subscriptions",
+    operation_id = "list_topic_subscriptions",
+    tag = "topics",
+    params(
+        ("pattern" = String, Path, description = "Topic pattern (glob)"),
+    ),
+    responses(
+        (status = 200, body = [TopicSubscription]),
+    )
+)]
 pub async fn list_subscriptions(
     State(state): State<AppState>,
     Path(pattern): Path<String>,

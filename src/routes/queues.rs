@@ -5,17 +5,18 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorResponse};
+use crate::ops::topic::TopicSubscription;
 use crate::ops::{queue_admin, topic};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateQueueRequest {
     pub name: String,
     #[serde(default)]
     pub fifo: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct QueueResponse {
     pub name: String,
     pub is_partitioned: bool,
@@ -23,7 +24,7 @@ pub struct QueueResponse {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct QueueMetricsResponse {
     pub name: String,
     pub queue_length: i64,
@@ -33,6 +34,21 @@ pub struct QueueMetricsResponse {
     pub scrape_time: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct PurgeResponse {
+    pub deleted: i64,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/queues",
+    tag = "queues",
+    request_body = CreateQueueRequest,
+    responses(
+        (status = 201, description = "Queue created"),
+        (status = 400, body = ErrorResponse),
+    )
+)]
 pub async fn create_queue(
     State(state): State<AppState>,
     Json(body): Json<CreateQueueRequest>,
@@ -45,6 +61,14 @@ pub async fn create_queue(
     Ok(StatusCode::CREATED)
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/queues",
+    tag = "queues",
+    responses(
+        (status = 200, body = [QueueResponse]),
+    )
+)]
 pub async fn list_queues(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let queues = queue_admin::list_queues(&state.pool, None).await?;
     let response: Vec<QueueResponse> = queues
@@ -59,6 +83,18 @@ pub async fn list_queues(State(state): State<AppState>) -> Result<impl IntoRespo
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/queues/{name}",
+    tag = "queues",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+    ),
+    responses(
+        (status = 200, body = QueueMetricsResponse),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn get_queue(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -74,6 +110,18 @@ pub async fn get_queue(
     }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/queues/{name}",
+    tag = "queues",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+    ),
+    responses(
+        (status = 204, description = "Queue deleted"),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn delete_queue(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -82,16 +130,39 @@ pub async fn delete_queue(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/queues/{name}/purge",
+    tag = "queues",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+    ),
+    responses(
+        (status = 200, body = PurgeResponse),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn purge_queue(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let count = queue_admin::purge_queue(&state.pool, &name).await?;
-    Ok(Json(serde_json::json!({ "deleted": count })))
+    Ok(Json(PurgeResponse { deleted: count }))
 }
 
-/// GET /v1/queues/{name}/subscriptions
-/// Lists all topic patterns this queue is bound to.
+#[utoipa::path(
+    get,
+    path = "/v1/queues/{name}/subscriptions",
+    operation_id = "list_queue_subscriptions",
+    tag = "queues",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+    ),
+    responses(
+        (status = 200, body = [TopicSubscription]),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn list_subscriptions(
     State(state): State<AppState>,
     Path(name): Path<String>,

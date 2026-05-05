@@ -1,0 +1,1098 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Beyond Queue",
+    "description": "PostgreSQL-native message queue with SQS-compatible and REST APIs.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "1"
+  },
+  "paths": {
+    "/v1/queues": {
+      "get": {
+        "tags": [
+          "queues"
+        ],
+        "operationId": "list_queues",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QueueResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "queues"
+        ],
+        "operationId": "create_queue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateQueueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Queue created"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{name}": {
+      "get": {
+        "tags": [
+          "queues"
+        ],
+        "operationId": "get_queue",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueMetricsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "queues"
+        ],
+        "operationId": "delete_queue",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Queue deleted"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{name}/messages": {
+      "get": {
+        "tags": [
+          "messages"
+        ],
+        "operationId": "receive_messages",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "description": "Maximum number of messages to return. Default: 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "Long-poll wait time in seconds. Default: 0 (no wait).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "vt",
+            "in": "query",
+            "description": "Visibility timeout in seconds. Default: 30.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "fifo",
+            "in": "query",
+            "description": "Return messages in FIFO order within a group. Default: false.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MessageResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "messages"
+        ],
+        "operationId": "send_messages",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "async_commit",
+            "in": "query",
+            "description": "Skip WAL fsync on commit. Improves throughput at the cost of durability:\nmessages can be lost on a PostgreSQL crash. Default: false (durable).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "messages"
+        ],
+        "operationId": "delete_batch",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{name}/messages/{id}": {
+      "delete": {
+        "tags": [
+          "messages"
+        ],
+        "operationId": "delete_message",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Message ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Message deleted"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "messages"
+        ],
+        "operationId": "change_visibility",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Message ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeVisibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeVisibilityResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{name}/purge": {
+      "post": {
+        "tags": [
+          "queues"
+        ],
+        "operationId": "purge_queue",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{name}/subscriptions": {
+      "get": {
+        "tags": [
+          "queues"
+        ],
+        "operationId": "list_queue_subscriptions",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TopicSubscription"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/topics/{pattern}/subscriptions": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "operationId": "list_topic_subscriptions",
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "description": "Topic pattern (glob)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TopicSubscription"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "topics"
+        ],
+        "operationId": "subscribe_queue",
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "description": "Topic pattern (glob)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicSubscription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/topics/{pattern}/subscriptions/{id}": {
+      "delete": {
+        "tags": [
+          "topics"
+        ],
+        "operationId": "unsubscribe_queue",
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "description": "Topic pattern (glob)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Subscription ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Subscription removed"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/topics/{routing_key}": {
+      "post": {
+        "tags": [
+          "topics"
+        ],
+        "operationId": "send_topic",
+        "parameters": [
+          {
+            "name": "routing_key",
+            "in": "path",
+            "description": "Routing key / topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicSendResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ChangeVisibilityRequest": {
+        "type": "object",
+        "required": [
+          "vt"
+        ],
+        "properties": {
+          "vt": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "ChangeVisibilityResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "visible_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "visible_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateQueueRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "fifo": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "DeleteBatchRequest": {
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "DeletedResponse": {
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "MessageResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "read_count",
+          "enqueued_at",
+          "visible_at",
+          "message"
+        ],
+        "properties": {
+          "enqueued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "headers": {},
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "message": {},
+          "read_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "visible_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PurgeResponse": {
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "QueueMetricsResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "queue_length",
+          "total_messages",
+          "scrape_time"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "newest_msg_age_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "oldest_msg_age_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "queue_length": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "scrape_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "total_messages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "QueueResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "is_partitioned",
+          "is_unlogged",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "is_partitioned": {
+            "type": "boolean"
+          },
+          "is_unlogged": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SendBody": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SendRequest"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SendRequest"
+            }
+          }
+        ]
+      },
+      "SendRequest": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "delay": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headers": {},
+          "message": {}
+        }
+      },
+      "SendResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ids"
+            ],
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SubscribeRequest": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "envelope": {
+            "type": "boolean",
+            "description": "Opt-in to SNS notification envelope; default false means raw payload delivery."
+          },
+          "protocol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queue_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TopicMessage": {
+        "type": "object",
+        "required": [
+          "queue_name",
+          "msg_id"
+        ],
+        "properties": {
+          "msg_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "queue_name": {
+            "type": "string"
+          }
+        }
+      },
+      "TopicSendRequest": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "delay": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "headers": {},
+          "message": {}
+        }
+      },
+      "TopicSendResponse": {
+        "type": "object",
+        "required": [
+          "queues_matched",
+          "messages"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopicMessage"
+            }
+          },
+          "queues_matched": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TopicSubscription": {
+        "type": "object",
+        "required": [
+          "id",
+          "pattern",
+          "protocol",
+          "endpoint",
+          "bound_at",
+          "raw_delivery"
+        ],
+        "properties": {
+          "bound_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "queue_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "raw_delivery": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "queues",
+      "description": "Queue lifecycle and metrics"
+    },
+    {
+      "name": "messages",
+      "description": "Send, receive, delete, and visibility"
+    },
+    {
+      "name": "topics",
+      "description": "Topic fan-out and subscriptions"
+    }
+  ]
+}

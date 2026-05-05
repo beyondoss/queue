@@ -8,7 +8,7 @@ use crate::error::{ApiError, topic_bind_error};
 // send_topic
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct TopicMessage {
     pub queue_name: String,
     pub msg_id: i64,
@@ -77,7 +77,7 @@ pub async fn queue_http_deliveries(
 // bindings
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct TopicSubscription {
     pub id: i64,
     pub pattern: String,

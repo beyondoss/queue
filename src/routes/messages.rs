@@ -5,10 +5,10 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorResponse};
 use crate::ops::{delete, receive, send, visibility};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SendRequest {
     pub message: serde_json::Value,
     pub headers: Option<serde_json::Value>,
@@ -17,14 +17,14 @@ pub struct SendRequest {
     pub group_id: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum SendBody {
     Single(SendRequest),
     Batch(Vec<SendRequest>),
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct SendQuery {
     /// Skip WAL fsync on commit. Improves throughput at the cost of durability:
     /// messages can be lost on a PostgreSQL crash. Default: false (durable).
@@ -32,21 +32,25 @@ pub struct SendQuery {
     pub async_commit: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum SendResponse {
     Single { id: i64 },
     Batch { ids: Vec<i64> },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct ReceiveQuery {
+    /// Maximum number of messages to return. Default: 1.
     #[serde(default = "default_max")]
     pub max: i32,
+    /// Long-poll wait time in seconds. Default: 0 (no wait).
     #[serde(default)]
     pub wait: i32,
+    /// Visibility timeout in seconds. Default: 30.
     #[serde(default = "default_vt")]
     pub vt: i32,
+    /// Return messages in FIFO order within a group. Default: false.
     #[serde(default)]
     pub fifo: bool,
 }
@@ -59,7 +63,7 @@ fn default_vt() -> i32 {
     30
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct MessageResponse {
     pub id: i64,
     pub read_count: i32,
@@ -69,16 +73,42 @@ pub struct MessageResponse {
     pub headers: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct ChangeVisibilityRequest {
     pub vt: i32,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ChangeVisibilityResponse {
+    pub id: i64,
+    pub visible_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct DeleteBatchRequest {
     pub ids: Vec<i64>,
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct DeletedResponse {
+    pub deleted: Vec<i64>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/queues/{name}/messages",
+    tag = "messages",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+        SendQuery,
+    ),
+    request_body = SendBody,
+    responses(
+        (status = 201, body = SendResponse),
+        (status = 400, body = ErrorResponse),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn send_messages(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -220,6 +250,19 @@ pub async fn send_messages(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/queues/{name}/messages",
+    tag = "messages",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+        ReceiveQuery,
+    ),
+    responses(
+        (status = 200, body = [MessageResponse]),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn receive_messages(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -245,6 +288,19 @@ pub async fn receive_messages(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/queues/{name}/messages/{id}",
+    tag = "messages",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+        ("id" = i64, Path, description = "Message ID"),
+    ),
+    responses(
+        (status = 204, description = "Message deleted"),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn delete_message(
     State(state): State<AppState>,
     Path((name, id)): Path<(String, i64)>,
@@ -257,23 +313,50 @@ pub async fn delete_message(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/queues/{name}/messages",
+    tag = "messages",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+    ),
+    request_body = DeleteBatchRequest,
+    responses(
+        (status = 200, body = DeletedResponse),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn delete_batch(
     State(state): State<AppState>,
     Path(name): Path<String>,
     Json(body): Json<DeleteBatchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let deleted = delete::delete_batch(&state.pool, &name, &body.ids).await?;
-    Ok(Json(serde_json::json!({ "deleted": deleted })))
+    Ok(Json(DeletedResponse { deleted }))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/v1/queues/{name}/messages/{id}",
+    tag = "messages",
+    params(
+        ("name" = String, Path, description = "Queue name"),
+        ("id" = i64, Path, description = "Message ID"),
+    ),
+    request_body = ChangeVisibilityRequest,
+    responses(
+        (status = 200, body = ChangeVisibilityResponse),
+        (status = 404, body = ErrorResponse),
+    )
+)]
 pub async fn change_visibility(
     State(state): State<AppState>,
     Path((name, id)): Path<(String, i64)>,
     Json(body): Json<ChangeVisibilityRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let result = visibility::change_visibility(&state.pool, &name, id, body.vt).await?;
-    Ok(Json(serde_json::json!({
-        "id": result.msg_id,
-        "visible_at": result.visible_at,
-    })))
+    Ok(Json(ChangeVisibilityResponse {
+        id: result.msg_id,
+        visible_at: result.visible_at,
+    }))
 }
