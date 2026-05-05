@@ -34,10 +34,13 @@ pub struct SendRequest {
 /// array is a batch.
 #[derive(Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
+#[schema(no_recursion)]
 pub enum SendBody {
     /// Send a single message.
+    #[schema(title = "SingleSend")]
     Single(SendRequest),
     /// Send multiple messages in one request.
+    #[schema(title = "BatchSend")]
     Batch(Vec<SendRequest>),
 }
 
@@ -54,13 +57,16 @@ pub struct SendQuery {
 /// batch sends return `{ "ids": [<i64>, ...] }`.
 #[derive(Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
+#[schema(no_recursion)]
 pub enum SendResponse {
     /// Result of a single-message send.
+    #[schema(title = "SingleSendResponse")]
     Single {
         /// Assigned message ID.
         id: i64,
     },
     /// Result of a batch send.
+    #[schema(title = "BatchSendResponse")]
     Batch {
         /// Assigned message IDs, in the same order as the request array.
         ids: Vec<i64>,
@@ -123,6 +129,7 @@ pub struct ChangeVisibilityRequest {
     /// New visibility timeout in seconds from now. The message will not be returned by
     /// receive calls until this duration elapses. Set to `0` to make the message
     /// immediately visible.
+    #[schema(minimum = 0)]
     pub vt: i32,
 }
 

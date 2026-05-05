@@ -15,7 +15,7 @@ dir = "sdk"
 depends = ["openapi:generate"]
 
 [tasks."test:all"]
-depends = ["test:unit", "test", "sdk:ts:test"]
+depends = ["test:unit", "test", "test:ts"]
 
 [tasks."build"]
 run = "cargo build"
