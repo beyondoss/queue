@@ -40,7 +40,7 @@ createQueueClient(opts: QueueClientOptions): QueueClient
 | `fetch`      | `function` | global fetch    | Custom fetch (for pooling or test mocks) |
 | `timeout`    | `number`   | —               | Per-request timeout in milliseconds      |
 | `retries`    | `number`   | `2`             | Max retries on transient 5xx failures    |
-| `onCommand`  | `function` | —               | Called before each request               |
+| `onRequest`  | `function` | —               | Called before each request               |
 | `onResponse` | `function` | —               | Called after each response with duration |
 
 ### Queues
@@ -142,7 +142,7 @@ await q.deleteMessage("payments", msg.id);
 ```ts
 const q = createQueueClient({
   url: "http://localhost:9324",
-  onCommand: (e) => logger.debug({ cmd: e.command }),
+  onRequest: (e) => logger.debug({ cmd: e.command }),
   onResponse: (e) =>
     metrics.histogram("queue.latency", e.durationMs, { cmd: e.command }),
 });

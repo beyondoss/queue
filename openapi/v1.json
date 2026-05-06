@@ -810,9 +810,9 @@
           }
         }
       },
-      "ErrorResponse": {
+      "ErrorBody": {
         "type": "object",
-        "description": "Wire-format error body returned on all non-2xx responses.",
+        "description": "Inner error payload for all non-2xx responses.",
         "required": [
           "code",
           "message"
@@ -822,9 +822,28 @@
             "type": "string",
             "description": "Machine-readable error code, e.g. `\"queue_not_found\"`, `\"bad_request\"`."
           },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional actionable guidance present on configuration-gate errors."
+          },
           "message": {
             "type": "string",
             "description": "Human-readable description of the error."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "Wire-format error envelope returned on all non-2xx responses.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
           }
         }
       },

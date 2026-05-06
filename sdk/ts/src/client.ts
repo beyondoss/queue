@@ -1,7 +1,9 @@
 import createFetchClient from "openapi-fetch";
+import { QueueError, QueueNotFoundError } from "./errors.js";
 import type { components, paths } from "./types.js";
 import { type Camelize, camelize } from "./utils/camelize.js";
 
+export { QueueError, QueueNotFoundError } from "./errors.js";
 export type { components, operations, paths } from "./types.js";
 export type { Camelize } from "./utils/camelize.js";
 
@@ -57,7 +59,7 @@ export interface PublishOptions {
   delay?: number;
 }
 
-export interface QueueCommandEvent {
+export interface QueueRequestEvent {
   command: string;
 }
 
@@ -81,39 +83,29 @@ export interface QueueClientOptions {
   /** Max retry attempts on transient 5xx failures. Default: 2. */
   retries?: number;
   /** Called before each request. */
-  onCommand?: (event: QueueCommandEvent) => void;
+  onRequest?: (event: QueueRequestEvent) => void;
   /** Called after each response. */
   onResponse?: (event: QueueResponseEvent) => void;
 }
 
-/** Flat error object exposed to consumers — always has `code` and `message` regardless of wire shape. */
-export interface ApiError {
-  code: string;
-  message: string;
-  hint?: string;
-}
-
-function toApiError(raw: unknown): ApiError {
-  if (raw != null && typeof raw === "object" && "error" in raw) {
-    const inner =
-      (raw as { error: { code?: string; message?: string; hint?: string } })
-        .error;
-    return {
-      code: inner?.code ?? "internal_error",
-      message: inner?.message ?? "Unknown error",
-      ...(inner?.hint != null ? { hint: inner.hint } : {}),
-    };
+function toQueueError(raw: unknown, status: number): QueueError {
+  const inner = raw != null && typeof raw === "object" && "error" in raw
+    ? (raw as { error: { code?: string; message?: string; hint?: string } })
+      .error
+    : (raw as { code?: string; message?: string; hint?: string } | undefined);
+  const code = inner?.code ?? "internal_error";
+  const message = inner?.message ?? "Unknown error";
+  const hint = inner?.hint;
+  if (code === "queue_not_found") {
+    const match = /Queue '([^']+)'/.exec(message);
+    return new QueueNotFoundError(match?.[1] ?? "unknown", status, hint);
   }
-  const flat = raw as { code?: string; message?: string };
-  return {
-    code: flat?.code ?? "internal_error",
-    message: flat?.message ?? "Unknown error",
-  };
+  return new QueueError(code, message, status, hint);
 }
 
 type ApiResult<T = undefined> = Promise<
   | { data: T; error: undefined; response: Response }
-  | { data: undefined; error: ApiError; response: Response }
+  | { data: undefined; error: QueueError; response: Response }
 >;
 
 export interface QueueClient {
@@ -177,7 +169,11 @@ function wrap<T>(
 ): ApiResult<Camelize<T>> {
   return promise.then(({ data, error, response }) =>
     error !== undefined
-      ? { data: undefined, error: toApiError(error), response }
+      ? {
+        data: undefined,
+        error: toQueueError(error, response.status),
+        response,
+      }
       : { data: camelize(data) as Camelize<T>, error: undefined, response }
   ) as unknown as ApiResult<Camelize<T>>;
 }
@@ -217,7 +213,7 @@ function buildFetch(
 /** Creates a queue client backed by the beyond-queue HTTP API. */
 export function createQueueClient(opts: QueueClientOptions): QueueClient {
   const base = opts.url.replace(/\/+$/, "");
-  const { onCommand, onResponse } = opts;
+  const { onRequest, onResponse } = opts;
 
   const client = createFetchClient<paths>({
     baseUrl: base,
@@ -231,7 +227,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
     fn: (...args: A) => Promise<R>,
   ): (...args: A) => Promise<R> {
     return async (...args) => {
-      onCommand?.({ command: name });
+      onRequest?.({ command: name });
       const start = Date.now();
       try {
         return await fn(...args);
@@ -246,7 +242,13 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
       const { error, response } = await client.POST("/v1/queues", {
         body: { name, fifo: qOpts?.fifo ?? false },
       });
-      if (error) return { data: undefined, error: toApiError(error), response };
+      if (error) {
+        return {
+          data: undefined,
+          error: toQueueError(error, response.status),
+          response,
+        };
+      }
       return {
         data: { queueUrl: `${base}/v1/queues/${encodeURIComponent(name)}` },
         error: undefined,
@@ -267,7 +269,11 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         params: { path: { name } },
       });
       if (error && response.status !== 404) {
-        return { data: undefined, error: toApiError(error), response };
+        return {
+          data: undefined,
+          error: toQueueError(error, response.status),
+          response,
+        };
       }
       return { data: undefined, error: undefined, response };
     }),
@@ -293,7 +299,13 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           },
         },
       );
-      if (error) return { data: undefined, error: toApiError(error), response };
+      if (error) {
+        return {
+          data: undefined,
+          error: toQueueError(error, response.status),
+          response,
+        };
+      }
       return { data: data as { id: number }, error: undefined, response };
     }),
 
@@ -313,7 +325,13 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           })) as components["schemas"]["SendRequest"][],
         },
       );
-      if (error) return { data: undefined, error: toApiError(error), response };
+      if (error) {
+        return {
+          data: undefined,
+          error: toQueueError(error, response.status),
+          response,
+        };
+      }
       return { data: data as { ids: number[] }, error: undefined, response };
     }),
 
@@ -340,7 +358,11 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         { params: { path: { name: queue, id } } },
       );
       if (error && response.status !== 404) {
-        return { data: undefined, error: toApiError(error), response };
+        return {
+          data: undefined,
+          error: toQueueError(error, response.status),
+          response,
+        };
       }
       return { data: undefined, error: undefined, response };
     }),
@@ -416,7 +438,11 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         { params: { path: { pattern: "_", id: subscriptionId } } },
       );
       if (error && response.status !== 404) {
-        return { data: undefined, error: toApiError(error), response };
+        return {
+          data: undefined,
+          error: toQueueError(error, response.status),
+          response,
+        };
       }
       return { data: undefined, error: undefined, response };
     }),

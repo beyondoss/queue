@@ -185,7 +185,7 @@ describe("messages — observability hooks", () => {
     const responses: string[] = [];
     const q = createQueueClient({
       url: getBaseUrl(),
-      onCommand: (e) => commands.push(e.command),
+      onRequest: (e) => commands.push(e.command),
       onResponse: (e) => responses.push(e.command),
     });
     const name = uniqueQueue();
