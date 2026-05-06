@@ -86,7 +86,30 @@ export interface QueueClientOptions {
   onResponse?: (event: QueueResponseEvent) => void;
 }
 
-type ApiError = components["schemas"]["ErrorResponse"];
+/** Flat error object exposed to consumers — always has `code` and `message` regardless of wire shape. */
+export interface ApiError {
+  code: string;
+  message: string;
+  hint?: string;
+}
+
+function toApiError(raw: unknown): ApiError {
+  if (raw != null && typeof raw === "object" && "error" in raw) {
+    const inner =
+      (raw as { error: { code?: string; message?: string; hint?: string } })
+        .error;
+    return {
+      code: inner?.code ?? "internal_error",
+      message: inner?.message ?? "Unknown error",
+      ...(inner?.hint != null ? { hint: inner.hint } : {}),
+    };
+  }
+  const flat = raw as { code?: string; message?: string };
+  return {
+    code: flat?.code ?? "internal_error",
+    message: flat?.message ?? "Unknown error",
+  };
+}
 
 type ApiResult<T = undefined> = Promise<
   | { data: T; error: undefined; response: Response }
@@ -150,11 +173,11 @@ export interface QueueClient {
 }
 
 function wrap<T>(
-  promise: Promise<{ data?: T; error?: ApiError; response: Response }>,
+  promise: Promise<{ data?: T; error?: unknown; response: Response }>,
 ): ApiResult<Camelize<T>> {
   return promise.then(({ data, error, response }) =>
     error !== undefined
-      ? { data: undefined, error, response }
+      ? { data: undefined, error: toApiError(error), response }
       : { data: camelize(data) as Camelize<T>, error: undefined, response }
   ) as unknown as ApiResult<Camelize<T>>;
 }
@@ -223,7 +246,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
       const { error, response } = await client.POST("/v1/queues", {
         body: { name, fifo: qOpts?.fifo ?? false },
       });
-      if (error) return { data: undefined, error, response };
+      if (error) return { data: undefined, error: toApiError(error), response };
       return {
         data: { queueUrl: `${base}/v1/queues/${encodeURIComponent(name)}` },
         error: undefined,
@@ -244,7 +267,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         params: { path: { name } },
       });
       if (error && response.status !== 404) {
-        return { data: undefined, error, response };
+        return { data: undefined, error: toApiError(error), response };
       }
       return { data: undefined, error: undefined, response };
     }),
@@ -270,7 +293,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           },
         },
       );
-      if (error) return { data: undefined, error, response };
+      if (error) return { data: undefined, error: toApiError(error), response };
       return { data: data as { id: number }, error: undefined, response };
     }),
 
@@ -290,7 +313,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           })) as components["schemas"]["SendRequest"][],
         },
       );
-      if (error) return { data: undefined, error, response };
+      if (error) return { data: undefined, error: toApiError(error), response };
       return { data: data as { ids: number[] }, error: undefined, response };
     }),
 
@@ -317,7 +340,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         { params: { path: { name: queue, id } } },
       );
       if (error && response.status !== 404) {
-        return { data: undefined, error, response };
+        return { data: undefined, error: toApiError(error), response };
       }
       return { data: undefined, error: undefined, response };
     }),
@@ -393,7 +416,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         { params: { path: { pattern: "_", id: subscriptionId } } },
       );
       if (error && response.status !== 404) {
-        return { data: undefined, error, response };
+        return { data: undefined, error: toApiError(error), response };
       }
       return { data: undefined, error: undefined, response };
     }),

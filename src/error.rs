@@ -1,15 +1,23 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
-use serde_json::json;
 
-/// Wire-format error body returned on all non-2xx responses.
+/// Inner error payload for all non-2xx responses.
 #[derive(Serialize, utoipa::ToSchema)]
-pub struct ErrorResponse {
+pub struct ErrorBody {
     /// Machine-readable error code, e.g. `"queue_not_found"`, `"bad_request"`.
     pub code: String,
     /// Human-readable description of the error.
     pub message: String,
+    /// Optional actionable guidance present on configuration-gate errors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+/// Wire-format error envelope returned on all non-2xx responses.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ErrorResponse {
+    pub error: ErrorBody,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,7 +86,13 @@ impl IntoResponse for ApiError {
             }
         };
 
-        let body = json!({ "code": code, "message": message });
+        let body = ErrorResponse {
+            error: ErrorBody {
+                code: code.to_string(),
+                message,
+                hint: None,
+            },
+        };
         (status, axum::Json(body)).into_response()
     }
 }

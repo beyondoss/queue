@@ -35,6 +35,7 @@ use crate::AppState;
         topics::list_subscriptions,
     ),
     components(schemas(
+        crate::error::ErrorBody,
         crate::error::ErrorResponse,
         queues::CreateQueueRequest,
         queues::QueueResponse,
