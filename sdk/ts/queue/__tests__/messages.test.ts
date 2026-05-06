@@ -66,14 +66,14 @@ describe("messages — send / receive / delete", () => {
     expect(error).toBeUndefined();
   });
 
-  it("deleteMany removes multiple messages and returns their ids", async () => {
+  it("deleteBatch removes multiple messages and returns their ids", async () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.queues.create(name);
     await q.messages.sendBatch(name, [{ message: "x" }, { message: "y" }]);
     const { data: received } = await q.messages.receive(name, { max: 2 });
     const ids = received!.map((m) => m.id);
-    const { data } = await q.messages.deleteMany(name, ids);
+    const { data } = await q.messages.deleteBatch(name, ids);
     expect(data?.deleted).toEqual(expect.arrayContaining(ids));
   });
 });

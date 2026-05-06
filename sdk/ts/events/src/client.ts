@@ -1,9 +1,9 @@
 import createFetchClient from "openapi-fetch";
-import { EventError, EventNotFoundError } from "./errors.js";
+import { EventError } from "./errors.js";
 import type { components, paths } from "./types.js";
 import { type Camelize, camelize } from "./utils/camelize.js";
 
-export { EventError, EventNotFoundError } from "./errors.js";
+export { EventError } from "./errors.js";
 export type { components, paths } from "./types.js";
 export type { Camelize } from "./utils/camelize.js";
 
@@ -17,7 +17,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-type ApiResult<T = undefined> = Promise<
+export type EventResult<T = undefined> = Promise<
   | { data: T; error: undefined; response: Response }
   | { data: undefined; error: EventError; response: Response }
 >;
@@ -84,20 +84,23 @@ export interface EventClient {
     routingKey: string,
     payload: JsonValue,
     opts?: PublishOptions,
-  ): ApiResult<PublishResult>;
+  ): EventResult<PublishResult>;
 
   subscriptions: {
     /** Subscribe a queue or HTTP endpoint to a glob pattern. */
     create(
       pattern: string,
       target: EventTarget,
-    ): ApiResult<Subscription>;
+    ): EventResult<Subscription>;
 
     /** List all subscriptions for an exact pattern. */
-    list(pattern: string): ApiResult<Subscription[]>;
+    list(pattern: string): EventResult<Subscription[]>;
+
+    /** List all subscriptions whose target is a specific queue. */
+    listByQueue(queueName: string): EventResult<Subscription[]>;
 
     /** Remove a subscription by ID. Idempotent — no error if already gone. */
-    delete(id: number): ApiResult;
+    delete(id: number): EventResult;
   };
 
   /** Release underlying connections. Call when the client is no longer needed. */
@@ -111,7 +114,6 @@ function toEventError(error: unknown, status: number): EventError {
     const e =
       (error as { error: { code?: string; message?: string; hint?: string } })
         .error;
-    if (status === 404) return new EventNotFoundError(e?.hint ?? undefined);
     return new EventError(
       e?.code ?? "unknown_error",
       e?.message ?? "Unknown error",
@@ -124,7 +126,7 @@ function toEventError(error: unknown, status: number): EventError {
 
 function wrap<T>(
   promise: Promise<{ data?: T; error?: unknown; response: Response }>,
-): ApiResult<Camelize<T>> {
+): EventResult<Camelize<T>> {
   return promise.then(({ data, error, response }) => {
     if (error !== undefined) {
       return {
@@ -140,7 +142,7 @@ function wrap<T>(
       error: undefined,
       response,
     };
-  }) as unknown as ApiResult<Camelize<T>>;
+  }) as unknown as EventResult<Camelize<T>>;
 }
 
 function buildFetch(
@@ -238,6 +240,13 @@ export function createEventClient(opts: EventClientOptions): EventClient {
         wrap(
           client.GET("/v1/events/{pattern}/subscriptions", {
             params: { path: { pattern } },
+          }),
+        )),
+
+      listByQueue: cmd("subscriptions.listByQueue", (queueName) =>
+        wrap(
+          client.GET("/v1/queues/{name}/subscriptions", {
+            params: { path: { name: queueName } },
           }),
         )),
 

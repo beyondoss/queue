@@ -133,6 +133,17 @@ describe("events — subscriptions", () => {
     expect(subs?.some((s) => s.pattern === pattern)).toBe(true);
   });
 
+  it("subscriptions.listByQueue returns subscriptions targeting the queue", async () => {
+    const baseUrl = getBaseUrl();
+    const e = eventClient();
+    const qName = uniqueName("q");
+    const pattern = `byqueue.${qName}`;
+    await createQueue(baseUrl, qName);
+    await e.subscriptions.create(pattern, { type: "queue", name: qName });
+    const { data: subs } = await e.subscriptions.listByQueue(qName);
+    expect(subs?.some((s) => s.pattern === pattern)).toBe(true);
+  });
+
   it("subscriptions.delete removes the binding", async () => {
     const baseUrl = getBaseUrl();
     const e = eventClient();

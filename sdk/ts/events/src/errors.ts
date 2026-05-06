@@ -22,21 +22,3 @@ export class EventError extends Error {
     this.hint = hint;
   }
 }
-
-/**
- * Returned in the `error` field when the target subscription does not exist.
- *
- * @example
- * ```ts
- * const { error } = await events.subscriptions.delete(id)
- * if (error instanceof EventNotFoundError) {
- *   console.error("subscription not found")
- * }
- * ```
- */
-export class EventNotFoundError extends EventError {
-  constructor(hint?: string) {
-    super("not_found", "Event subscription not found", 404, hint);
-    this.name = "EventNotFoundError";
-  }
-}

@@ -1,9 +1,9 @@
 import createFetchClient from "openapi-fetch";
-import { QueueError, QueueNotFoundError } from "./errors.js";
+import { QueueError } from "./errors.js";
 import type { components, paths } from "./types.js";
 import { type Camelize, camelize } from "./utils/camelize.js";
 
-export { QueueError, QueueNotFoundError } from "./errors.js";
+export { QueueError } from "./errors.js";
 export type { components, operations, paths } from "./types.js";
 export type { Camelize } from "./utils/camelize.js";
 
@@ -14,8 +14,6 @@ export type QueueStats = Camelize<
   components["schemas"]["QueueMetricsResponse"]
 >;
 export type Message = Camelize<components["schemas"]["MessageResponse"]>;
-export type Subscription = Camelize<components["schemas"]["TopicSubscription"]>;
-
 export type JsonValue =
   | string
   | number
@@ -84,7 +82,7 @@ export interface QueueClientOptions {
   onResponse?: (event: QueueResponseEvent) => void;
 }
 
-type ApiResult<T = undefined> = Promise<
+export type QueueResult<T = undefined> = Promise<
   | { data: T; error: undefined; response: Response }
   | { data: undefined; error: QueueError; response: Response }
 >;
@@ -94,37 +92,36 @@ export interface QueueClient {
     create(
       name: string,
       opts?: CreateQueueOptions,
-    ): ApiResult<{ queueUrl: string }>;
-    list(): ApiResult<Queue[]>;
-    get(name: string): ApiResult<QueueStats>;
-    delete(name: string): ApiResult;
+    ): QueueResult<{ queueUrl: string }>;
+    list(): QueueResult<Queue[]>;
+    get(name: string): QueueResult<QueueStats>;
+    delete(name: string): QueueResult;
     purge(
       name: string,
-    ): ApiResult<Camelize<components["schemas"]["PurgeResponse"]>>;
-    listSubscriptions(name: string): ApiResult<Subscription[]>;
+    ): QueueResult<Camelize<components["schemas"]["PurgeResponse"]>>;
   };
   messages: {
     send(
       queue: string,
       message: JsonValue,
       opts?: SendOptions,
-    ): ApiResult<{ id: number }>;
+    ): QueueResult<{ id: number }>;
     sendBatch(
       queue: string,
       entries: BatchEntry[],
       opts?: BatchOptions,
-    ): ApiResult<{ ids: number[] }>;
-    receive(queue: string, opts?: ReceiveOptions): ApiResult<Message[]>;
-    delete(queue: string, id: number): ApiResult;
-    deleteMany(
+    ): QueueResult<{ ids: number[] }>;
+    receive(queue: string, opts?: ReceiveOptions): QueueResult<Message[]>;
+    delete(queue: string, id: number): QueueResult;
+    deleteBatch(
       queue: string,
       ids: number[],
-    ): ApiResult<Camelize<components["schemas"]["DeletedResponse"]>>;
+    ): QueueResult<Camelize<components["schemas"]["DeletedResponse"]>>;
     changeVisibility(
       queue: string,
       id: number,
       visibilityTimeout: number,
-    ): ApiResult<Camelize<components["schemas"]["ChangeVisibilityResponse"]>>;
+    ): QueueResult<Camelize<components["schemas"]["ChangeVisibilityResponse"]>>;
   };
   /** Release underlying connections. Call when the client is no longer needed. */
   close(): Promise<void>;
@@ -140,16 +137,12 @@ function toQueueError(raw: unknown, status: number): QueueError {
   const code = inner?.code ?? "internal_error";
   const message = inner?.message ?? "Unknown error";
   const hint = inner?.hint;
-  if (code === "queue_not_found") {
-    const match = /Queue '([^']+)'/.exec(message);
-    return new QueueNotFoundError(match?.[1] ?? "unknown", status, hint);
-  }
   return new QueueError(code, message, status, hint);
 }
 
 function wrap<T>(
   promise: Promise<{ data?: T; error?: unknown; response: Response }>,
-): ApiResult<Camelize<T>> {
+): QueueResult<Camelize<T>> {
   return promise.then(({ data, error, response }) =>
     error !== undefined
       ? {
@@ -158,7 +151,7 @@ function wrap<T>(
         response,
       }
       : { data: camelize(data) as Camelize<T>, error: undefined, response }
-  ) as unknown as ApiResult<Camelize<T>>;
+  ) as unknown as QueueResult<Camelize<T>>;
 }
 
 function buildFetch(
@@ -270,13 +263,6 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
             params: { path: { name } },
           }),
         )),
-
-      listSubscriptions: cmd("queues.listSubscriptions", (queueName) =>
-        wrap(
-          client.GET("/v1/queues/{name}/subscriptions", {
-            params: { path: { name: queueName } },
-          }),
-        )),
     },
 
     messages: {
@@ -366,7 +352,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         return { data: undefined, error: undefined, response };
       }),
 
-      deleteMany: cmd("messages.deleteMany", (queue, ids) =>
+      deleteBatch: cmd("messages.deleteBatch", (queue, ids) =>
         wrap(
           client.DELETE("/v1/queues/{name}/messages", {
             params: { path: { name: queue } },

@@ -22,29 +22,3 @@ export class QueueError extends Error {
     this.hint = hint;
   }
 }
-
-/**
- * Returned in the `error` field when the target queue does not exist.
- *
- * @example
- * ```ts
- * const { error } = await queue.receiveMessages("my-queue")
- * if (error instanceof QueueNotFoundError) {
- *   console.error(`queue not found: ${error.queueName}`)
- * }
- * ```
- */
-export class QueueNotFoundError extends QueueError {
-  readonly queueName: string;
-
-  constructor(queueName: string, status: number, hint?: string) {
-    super(
-      "queue_not_found",
-      `Queue '${queueName}' does not exist`,
-      status,
-      hint,
-    );
-    this.name = "QueueNotFoundError";
-    this.queueName = queueName;
-  }
-}
