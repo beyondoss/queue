@@ -74,11 +74,10 @@ export interface QueueClientOptions {
 
 type ApiError = components["schemas"]["ErrorResponse"];
 
-type ApiResult<T = undefined> = Promise<{
-  data: T | undefined;
-  error: ApiError | undefined;
-  response: Response;
-}>;
+type ApiResult<T = undefined> = Promise<
+  | { data: T; error: undefined; response: Response }
+  | { data: undefined; error: ApiError; response: Response }
+>;
 
 export interface QueueClient {
   // ── Queue management ──────────────────────────────────────────────────────
@@ -134,14 +133,14 @@ export interface QueueClient {
   close(): Promise<void>;
 }
 
-function wrap<T, E>(
-  promise: Promise<{ data?: T; error?: E; response: Response }>,
-): Promise<{ data: T | undefined; error: E | undefined; response: Response }> {
-  return promise.then(({ data, error, response }) => ({
-    data,
-    error,
-    response,
-  }));
+function wrap<T>(
+  promise: Promise<{ data?: T; error?: ApiError; response: Response }>,
+): ApiResult<T> {
+  return promise.then(({ data, error, response }) =>
+    error !== undefined
+      ? { data: undefined, error, response }
+      : { data: data as T, error: undefined, response }
+  ) as unknown as ApiResult<T>;
 }
 
 function buildFetch(
@@ -255,7 +254,8 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           },
         },
       );
-      return { data: data as { id: number } | undefined, error, response };
+      if (error) return { data: undefined, error, response };
+      return { data: data as { id: number }, error: undefined, response };
     }),
 
     sendBatch: cmd("sendBatch", async (queue, entries, bOpts) => {
@@ -269,7 +269,8 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
           body: entries,
         },
       );
-      return { data: data as { ids: number[] } | undefined, error, response };
+      if (error) return { data: undefined, error, response };
+      return { data: data as { ids: number[] }, error: undefined, response };
     }),
 
     receiveMessages: cmd("receiveMessages", (queue, rOpts) =>
