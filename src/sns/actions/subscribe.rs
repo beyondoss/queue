@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 
 use crate::AppState;
-use crate::ops::topic;
+use crate::ops::event;
 use crate::sns::context::SnsContext;
 use crate::sns::error::{SnsError, SnsErrorCode};
 use crate::sns::types::{SubscribeRequest, SubscribeResponse};
@@ -41,7 +41,7 @@ pub async fn handle(
         _ => (req.endpoint.clone(), None),
     };
 
-    let sub = topic::subscribe(
+    let sub = event::subscribe(
         &state.pool,
         &topic_name,
         protocol,

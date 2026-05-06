@@ -86,7 +86,7 @@ impl SnsContext {
         format!("arn:aws:sns:{}:{}:{}:{}", REGION, ACCOUNT, topic, id)
     }
 
-    pub fn subscription_arn_for(&self, sub: &crate::ops::topic::TopicSubscription) -> String {
+    pub fn subscription_arn_for(&self, sub: &crate::ops::event::TopicSubscription) -> String {
         match sub.protocol.as_str() {
             "sqs" => self.subscription_arn(&sub.pattern, sub.queue_name.as_deref().unwrap_or("")),
             _ => self.subscription_arn_http(&sub.pattern, sub.id),

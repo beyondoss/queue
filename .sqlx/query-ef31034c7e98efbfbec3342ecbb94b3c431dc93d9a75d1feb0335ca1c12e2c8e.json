@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue.event_deliveries\n                   SET attempt = attempt + 1, last_error = $1, next_attempt_at = $2\n                   WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a1251aa23a7d6e8ea492c9fc995137841a5efcfcdd0abeea94b7deaee5f47145"
+}

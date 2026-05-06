@@ -422,10 +422,10 @@ CREATE FUNCTION queue.send_fifo(
     SELECT * FROM queue.send_fifo(queue_name, msg, message_group_id, deduplication_id, headers, delay);
 $$;
 
--- send_topic (canonical): (TEXT, JSONB, JSONB, TIMESTAMPTZ, BOOLEAN) -> TABLE(queue_name text, msg_id bigint)
+-- publish_event (canonical): (TEXT, JSONB, JSONB, TIMESTAMPTZ, BOOLEAN) -> TABLE(queue_name text, msg_id bigint)
 -- PL/pgSQL stub matching the pgrx C function signature; used in tests without extension.
 -- sync_commit is ignored in the PL/pgSQL stub.
-CREATE FUNCTION queue.send_topic(
+CREATE FUNCTION queue.publish_event(
     routing_key TEXT,
     msg         JSONB,
     headers     JSONB,
@@ -436,7 +436,7 @@ DECLARE
     b RECORD;
 BEGIN
     FOR b IN
-        SELECT DISTINCT tb.queue_name FROM queue.topic_subscriptions tb
+        SELECT DISTINCT tb.queue_name FROM queue.event_subscriptions tb
         WHERE routing_key ~ tb.compiled_regex
           AND tb.queue_name IS NOT NULL
         ORDER BY tb.queue_name

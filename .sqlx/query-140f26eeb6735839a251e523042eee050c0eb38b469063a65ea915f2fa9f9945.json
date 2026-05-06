@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               id           AS \"id!: i64\",\n               pattern      AS \"pattern!\",\n               protocol     AS \"protocol!\",\n               endpoint     AS \"endpoint!\",\n               queue_name,\n               bound_at     AS \"bound_at!: DateTime<Utc>\",\n               raw_delivery AS \"raw_delivery!\"\n           FROM queue.event_subscriptions\n           WHERE queue_name = $1\n           ORDER BY pattern",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "pattern!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "protocol!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "endpoint!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "queue_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "bound_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "raw_delivery!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "05040ce5cf1e821a5ecfd034ecb29efadc63fe95829f7351f4fff411d6796b98"
+}

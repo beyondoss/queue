@@ -105,7 +105,7 @@ async fn test_delete_queue_cascades_to_subscriptions() {
     // Bind the queue to a topic.
     client
         .post(
-            "/v1/topics/test.cascade.topic/subscriptions",
+            "/v1/events/test.cascade.topic/subscriptions",
             &serde_json::json!({ "queue_name": "test_cascade_q" }),
         )
         .await
@@ -128,7 +128,7 @@ async fn test_delete_queue_cascades_to_subscriptions() {
     // Publish should succeed with 0 matches (no dangling subscription).
     let res = client
         .post(
-            "/v1/topics/test.cascade.topic",
+            "/v1/events/test.cascade.topic",
             &serde_json::json!({ "message": { "x": 1 } }),
         )
         .await

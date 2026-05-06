@@ -9,7 +9,7 @@ async fn test_http_delivery_raw() {
     // Subscribe HTTP endpoint (raw delivery by default)
     client
         .post(
-            "/v1/topics/orders.*/subscriptions",
+            "/v1/events/orders.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
         )
         .await
@@ -18,7 +18,7 @@ async fn test_http_delivery_raw() {
     // Publish via REST API
     client
         .post(
-            "/v1/topics/orders.placed",
+            "/v1/events/orders.placed",
             &serde_json::json!({ "message": { "id": 42 } }),
         )
         .await
@@ -38,7 +38,7 @@ async fn test_http_delivery_envelope() {
     // Subscribe with envelope=true to get SNS wrapper
     client
         .post(
-            "/v1/topics/events.*/subscriptions",
+            "/v1/events/events.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": webhook.url, "envelope": true }),
         )
         .await
@@ -46,7 +46,7 @@ async fn test_http_delivery_envelope() {
 
     client
         .post(
-            "/v1/topics/events.created",
+            "/v1/events/events.created",
             &serde_json::json!({ "message": { "type": "created" } }),
         )
         .await
@@ -70,7 +70,7 @@ async fn test_http_delivery_retry_on_failure() {
 
     client
         .post(
-            "/v1/topics/retry.*/subscriptions",
+            "/v1/events/retry.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
         )
         .await
@@ -78,7 +78,7 @@ async fn test_http_delivery_retry_on_failure() {
 
     client
         .post(
-            "/v1/topics/retry.test",
+            "/v1/events/retry.test",
             &serde_json::json!({ "message": { "x": 1 } }),
         )
         .await
@@ -103,7 +103,7 @@ async fn test_http_delivery_unsubscribe_cancels_pending() {
     // Subscribe and get the subscription id from the response
     let sub = client
         .post(
-            "/v1/topics/cancel.*/subscriptions",
+            "/v1/events/cancel.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
         )
         .await
@@ -114,7 +114,7 @@ async fn test_http_delivery_unsubscribe_cancels_pending() {
     // Publish — creates an http_deliveries row
     client
         .post(
-            "/v1/topics/cancel.me",
+            "/v1/events/cancel.me",
             &serde_json::json!({ "message": { "x": 99 } }),
         )
         .await
@@ -122,7 +122,7 @@ async fn test_http_delivery_unsubscribe_cancels_pending() {
 
     // Unsubscribe — CASCADE deletes http_deliveries rows
     client
-        .delete(&format!("/v1/topics/cancel.*/subscriptions/{sub_id}"))
+        .delete(&format!("/v1/events/cancel.*/subscriptions/{sub_id}"))
         .await
         .assert_status(204);
 
@@ -147,7 +147,7 @@ async fn test_http_delivery_dead_letter() {
 
     client
         .post(
-            "/v1/topics/deadletter.*/subscriptions",
+            "/v1/events/deadletter.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
         )
         .await
@@ -155,7 +155,7 @@ async fn test_http_delivery_dead_letter() {
 
     client
         .post(
-            "/v1/topics/deadletter.test",
+            "/v1/events/deadletter.test",
             &serde_json::json!({ "message": { "fail": true } }),
         )
         .await
@@ -223,7 +223,7 @@ async fn test_http_delivery_endpoint_timeout() {
 
     client
         .post(
-            "/v1/topics/timeout.*/subscriptions",
+            "/v1/events/timeout.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": endpoint_url }),
         )
         .await
@@ -231,7 +231,7 @@ async fn test_http_delivery_endpoint_timeout() {
 
     client
         .post(
-            "/v1/topics/timeout.test",
+            "/v1/events/timeout.test",
             &serde_json::json!({ "message": { "x": 1 } }),
         )
         .await
@@ -268,7 +268,7 @@ async fn test_http_delivery_lease_reset_retries() {
 
     client
         .post(
-            "/v1/topics/leasereset.*/subscriptions",
+            "/v1/events/leasereset.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": webhook.url }),
         )
         .await
@@ -276,7 +276,7 @@ async fn test_http_delivery_lease_reset_retries() {
 
     client
         .post(
-            "/v1/topics/leasereset.test",
+            "/v1/events/leasereset.test",
             &serde_json::json!({ "message": { "x": 1 } }),
         )
         .await

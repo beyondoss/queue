@@ -525,12 +525,12 @@
         }
       }
     },
-    "/v1/topics/{pattern}/subscriptions": {
+    "/v1/events/{pattern}/subscriptions": {
       "get": {
         "tags": [
-          "topics"
+          "events"
         ],
-        "operationId": "list_topic_subscriptions",
+        "operationId": "list_event_subscriptions",
         "parameters": [
           {
             "name": "pattern",
@@ -560,7 +560,7 @@
       },
       "post": {
         "tags": [
-          "topics"
+          "events"
         ],
         "operationId": "subscribe_queue",
         "parameters": [
@@ -608,10 +608,10 @@
         }
       }
     },
-    "/v1/topics/{pattern}/subscriptions/{id}": {
+    "/v1/events/{pattern}/subscriptions/{id}": {
       "delete": {
         "tags": [
-          "topics"
+          "events"
         ],
         "operationId": "unsubscribe_queue",
         "parameters": [
@@ -652,12 +652,12 @@
         }
       }
     },
-    "/v1/topics/{routing_key}": {
+    "/v1/events/{routing_key}": {
       "post": {
         "tags": [
-          "topics"
+          "events"
         ],
-        "operationId": "send_topic",
+        "operationId": "publish_event",
         "parameters": [
           {
             "name": "routing_key",
@@ -1091,7 +1091,7 @@
       "description": "Send, receive, delete, and visibility"
     },
     {
-      "name": "topics",
+      "name": "events",
       "description": "Topic fan-out and subscriptions"
     }
   ]

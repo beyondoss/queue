@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::error::{ApiError, ErrorResponse};
-use crate::ops::topic::TopicSubscription;
-use crate::ops::{queue_admin, topic};
+use crate::ops::event::TopicSubscription;
+use crate::ops::{event, queue_admin};
 
 /// Request body for queue creation.
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -204,6 +204,6 @@ pub async fn list_subscriptions(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let bindings = topic::list_by_queue(&state.pool, &name).await?;
+    let bindings = event::list_by_queue(&state.pool, &name).await?;
     Ok(Json(bindings))
 }

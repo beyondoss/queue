@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 
 use crate::AppState;
-use crate::ops::topic;
+use crate::ops::event;
 use crate::sns::actions::list_subscriptions::subscription_entry;
 
 use crate::sns::context::SnsContext;
@@ -19,7 +19,7 @@ pub async fn handle(
         .ok_or_else(|| ctx.error(SnsErrorCode::InvalidParameter))?
         .to_string();
 
-    let subs = topic::list_by_pattern(&state.pool, &topic_name)
+    let subs = event::list_by_pattern(&state.pool, &topic_name)
         .await
         .map_err(|e| ctx.internal_error(e))?;
 

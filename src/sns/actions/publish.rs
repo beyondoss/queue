@@ -4,7 +4,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::ops::topic;
+use crate::ops::event;
 use crate::sns::context::SnsContext;
 use crate::sns::error::{SnsError, SnsErrorCode};
 use crate::sns::types::{PublishRequest, PublishResponse};
@@ -51,12 +51,12 @@ pub async fn handle(
     let stored = serde_json::json!({ "Body": envelope.to_string() });
 
     // Fan out to SQS queues
-    topic::send_topic(&state.pool, &topic_name, stored, None, 0)
+    event::publish_event(&state.pool, &topic_name, stored, None, 0)
         .await
         .map_err(|e| ctx.internal_error(e))?;
 
     // Queue HTTP/HTTPS deliveries
-    topic::queue_http_deliveries(&state.pool, &topic_name, &raw_message, Some(&envelope))
+    event::queue_event_deliveries(&state.pool, &topic_name, &raw_message, Some(&envelope))
         .await
         .map_err(|e| ctx.internal_error(e))?;
 

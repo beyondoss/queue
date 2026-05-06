@@ -10,6 +10,190 @@
     "version": "1"
   },
   "paths": {
+    "/v1/events/{pattern}/subscriptions": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "List all subscriptions for an event pattern. Returns subscriptions whose pattern\nexactly matches the given value.",
+        "operationId": "list_event_subscriptions",
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "description": "Exact event pattern to look up.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subscriptions for this pattern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TopicSubscription"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Subscribe a queue or HTTP endpoint to an event pattern. Messages published to any\nrouting key that matches `pattern` (glob syntax) will be delivered to this subscriber.",
+        "description": "Queue subscription: provide `queue_name` — messages are enqueued directly.\nWebhook subscription: provide `protocol` (`\"http\"` or `\"https\"`) and `endpoint` URL.",
+        "operationId": "subscribe",
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "description": "Glob pattern matched against routing keys at publish time (e.g. `payments.*`, `**` to match all events).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Subscription created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicSubscription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters or conflicting options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events/{pattern}/subscriptions/{id}": {
+      "delete": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Remove an event subscription by ID. Idempotent: returns 404 if the subscription\nno longer exists.",
+        "operationId": "unsubscribe",
+        "parameters": [
+          {
+            "name": "pattern",
+            "in": "path",
+            "description": "Event pattern (for URL structure; the subscription ID alone uniquely identifies the record).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Subscription ID returned by subscribe.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Subscription removed."
+          },
+          "404": {
+            "description": "Subscription does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events/{routing_key}": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Publish a message to an event routing key. The routing key is matched against all\nsubscription patterns (glob syntax). One copy of the message is enqueued in each\nmatching queue and an HTTP POST is dispatched to each matching HTTP/HTTPS endpoint.",
+        "description": "HTTP subscribers receive the raw message body or an SNS-style notification envelope\ndepending on how the subscription was created (`envelope` flag at subscribe time).",
+        "operationId": "publish_event",
+        "parameters": [
+          {
+            "name": "routing_key",
+            "in": "path",
+            "description": "Routing key matched against subscription patterns using glob syntax (e.g. `payments.created`, `orders.*`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Message published. Returns the matched queue count and per-queue message IDs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicSendResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No subscriptions match the routing key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/queues": {
       "get": {
         "tags": [
@@ -536,190 +720,6 @@
           }
         }
       }
-    },
-    "/v1/topics/{pattern}/subscriptions": {
-      "get": {
-        "tags": [
-          "topics"
-        ],
-        "summary": "List all subscriptions for a topic pattern. Returns subscriptions whose pattern\nexactly matches the given value.",
-        "operationId": "list_topic_subscriptions",
-        "parameters": [
-          {
-            "name": "pattern",
-            "in": "path",
-            "description": "Exact topic pattern to look up.",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Subscriptions for this pattern.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TopicSubscription"
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "topics"
-        ],
-        "summary": "Subscribe a queue or HTTP endpoint to a topic pattern. Messages published to any\nrouting key that matches `pattern` (glob syntax) will be delivered to this subscriber.",
-        "description": "Queue subscription: provide `queue_name` — messages are enqueued directly.\nWebhook subscription: provide `protocol` (`\"http\"` or `\"https\"`) and `endpoint` URL.",
-        "operationId": "subscribe",
-        "parameters": [
-          {
-            "name": "pattern",
-            "in": "path",
-            "description": "Glob pattern matched against routing keys at publish time (e.g. `payments.*`, `**` to match all topics).",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubscribeRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Subscription created.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TopicSubscription"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid parameters or conflicting options.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/topics/{pattern}/subscriptions/{id}": {
-      "delete": {
-        "tags": [
-          "topics"
-        ],
-        "summary": "Remove a topic subscription by ID. Idempotent: returns 404 if the subscription\nno longer exists.",
-        "operationId": "unsubscribe",
-        "parameters": [
-          {
-            "name": "pattern",
-            "in": "path",
-            "description": "Topic pattern (for URL structure; the subscription ID alone uniquely identifies the record).",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Subscription ID returned by subscribe.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Subscription removed."
-          },
-          "404": {
-            "description": "Subscription does not exist.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/topics/{routing_key}": {
-      "post": {
-        "tags": [
-          "topics"
-        ],
-        "summary": "Publish a message to a topic. The routing key is matched against all subscription\npatterns (glob syntax). One copy of the message is enqueued in each matching queue\nand an HTTP POST is dispatched to each matching HTTP/HTTPS endpoint.",
-        "description": "HTTP subscribers receive the raw message body or an SNS-style notification envelope\ndepending on how the subscription was created (`envelope` flag at subscribe time).",
-        "operationId": "publish_topic",
-        "parameters": [
-          {
-            "name": "routing_key",
-            "in": "path",
-            "description": "Routing key matched against subscription patterns using glob syntax (e.g. `payments.created`, `orders.*`).",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TopicSendRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Message published. Returns the matched queue count and per-queue message IDs.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TopicSendResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No subscriptions match the routing key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -1077,7 +1077,7 @@
       },
       "SubscribeRequest": {
         "type": "object",
-        "description": "Request body to create a topic subscription. Provide either `queue_name` (to route\ninto an internal queue) or `protocol` + `endpoint` (for HTTP/HTTPS webhook delivery).\nThe two forms are mutually exclusive.",
+        "description": "Request body to create an event subscription. Provide either `queue_name` (to route\ninto an internal queue) or `protocol` + `endpoint` (for HTTP/HTTPS webhook delivery).\nThe two forms are mutually exclusive.",
         "properties": {
           "endpoint": {
             "type": [
@@ -1127,7 +1127,7 @@
       },
       "TopicSendRequest": {
         "type": "object",
-        "description": "Request body for publishing a message to a topic.",
+        "description": "Request body for publishing a message to an event routing key.",
         "required": [
           "message",
           "headers"
@@ -1153,7 +1153,7 @@
       },
       "TopicSendResponse": {
         "type": "object",
-        "description": "Result of a topic publish operation.",
+        "description": "Result of an event publish operation.",
         "required": [
           "queues_matched",
           "messages"
@@ -1197,7 +1197,7 @@
           "id": {
             "type": "integer",
             "format": "int64",
-            "description": "Subscription ID. Use this to unsubscribe via `DELETE /v1/topics/{pattern}/subscriptions/{id}`."
+            "description": "Subscription ID. Use this to unsubscribe via `DELETE /v1/events/{pattern}/subscriptions/{id}`."
           },
           "pattern": {
             "type": "string",
@@ -1232,8 +1232,8 @@
       "description": "Send, receive, delete, and visibility"
     },
     {
-      "name": "topics",
-      "description": "Topic fan-out and subscriptions"
+      "name": "events",
+      "description": "Event fan-out and subscriptions"
     }
   ]
 }

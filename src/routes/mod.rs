@@ -1,6 +1,6 @@
+pub mod events;
 pub mod messages;
 pub mod queues;
-pub mod topics;
 
 use axum::Router;
 use axum::extract::State;
@@ -29,10 +29,10 @@ use crate::AppState;
         messages::delete_message,
         messages::delete_batch,
         messages::change_visibility,
-        topics::send_topic,
-        topics::subscribe_queue,
-        topics::unsubscribe_queue,
-        topics::list_subscriptions,
+        events::publish_event,
+        events::subscribe_queue,
+        events::unsubscribe_queue,
+        events::list_subscriptions,
     ),
     components(schemas(
         crate::error::ErrorBody,
@@ -49,16 +49,16 @@ use crate::AppState;
         messages::ChangeVisibilityResponse,
         messages::DeleteBatchRequest,
         messages::DeletedResponse,
-        topics::TopicSendRequest,
-        topics::TopicSendResponse,
-        topics::SubscribeRequest,
-        crate::ops::topic::TopicMessage,
-        crate::ops::topic::TopicSubscription,
+        events::TopicSendRequest,
+        events::TopicSendResponse,
+        events::SubscribeRequest,
+        crate::ops::event::TopicMessage,
+        crate::ops::event::TopicSubscription,
     )),
     tags(
         (name = "queues", description = "Queue lifecycle and metrics"),
         (name = "messages", description = "Send, receive, delete, and visibility"),
-        (name = "topics", description = "Topic fan-out and subscriptions"),
+        (name = "events", description = "Event fan-out and subscriptions"),
     )
 )]
 pub struct ApiDoc;
@@ -89,14 +89,14 @@ pub fn router() -> Router<AppState> {
             "/queues/{name}/subscriptions",
             get(queues::list_subscriptions),
         )
-        .route("/topics/{routing_key}", post(topics::send_topic))
+        .route("/events/{routing_key}", post(events::publish_event))
         .route(
-            "/topics/{pattern}/subscriptions",
-            post(topics::subscribe_queue).get(topics::list_subscriptions),
+            "/events/{pattern}/subscriptions",
+            post(events::subscribe_queue).get(events::list_subscriptions),
         )
         .route(
-            "/topics/{pattern}/subscriptions/{id}",
-            delete(topics::unsubscribe_queue),
+            "/events/{pattern}/subscriptions/{id}",
+            delete(events::unsubscribe_queue),
         )
 }
 

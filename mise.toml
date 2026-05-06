@@ -14,7 +14,7 @@ run = "cargo build"
 run = "cargo build --release"
 
 [tasks."build:ts"]
-run = "npm run build"
+run = "npm run build --workspaces --if-present"
 dir = "sdk/ts"
 depends = ["generate:types"]
 
@@ -22,7 +22,7 @@ depends = ["generate:types"]
 run = "cargo clippy --workspace -- -D warnings"
 
 [tasks."check:ts"]
-run = "npm run typecheck"
+run = "npm run typecheck --workspaces --if-present"
 dir = "sdk/ts"
 depends = ["generate:types"]
 
@@ -33,7 +33,7 @@ run = "dprint check"
 run = "dprint fmt"
 
 [tasks."install:ts"]
-run = "npm ci"
+run = "npm install"
 dir = "sdk/ts"
 
 [tasks."test:unit:rs"]
@@ -42,17 +42,28 @@ run = "cargo test --lib"
 [tasks."test:integration:rs"]
 run = "cargo test --test integration_test"
 
-[tasks."test:integration:ts"]
+[tasks."test:integration:queue"]
 run = "npm test"
-dir = "sdk/ts"
+dir = "sdk/ts/queue"
 depends = ["generate:types", "build:rs"]
+
+[tasks."test:integration:events"]
+run = "npm test"
+dir = "sdk/ts/events"
+depends = ["generate:types", "build:rs"]
+
+[tasks."test:integration:ts"]
+depends = ["test:integration:queue", "test:integration:events"]
 
 [tasks."generate:openapi"]
 run = "cargo run -- generate-openapi"
 
 [tasks."generate:types"]
-run = ["cd ts && node scripts/generate-types.mjs"]
-dir = "sdk"
+run = [
+  "node queue/scripts/generate-types.mjs",
+  "node events/scripts/generate-types.mjs",
+]
+dir = "sdk/ts"
 depends = ["install:ts", "generate:openapi"]
 
 [tasks."sqlx:prepare"]

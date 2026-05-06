@@ -858,7 +858,7 @@ fn change_visibility_batch_ts(
 }
 
 // ---------------------------------------------------------------------------
-// send_topic  (pgrx hot path — replaces PL/pgSQL loop in schema.sql)
+// publish_event  (pgrx hot path — replaces PL/pgSQL loop in schema.sql)
 // ---------------------------------------------------------------------------
 
 fn validate_routing_key(routing_key: &str) {
@@ -891,16 +891,16 @@ fn validate_routing_key(routing_key: &str) {
 /// Fanout a single message to every queue whose binding matches `routing_key`.
 ///
 /// Routing results are cached in shared memory (RoutingCache). On a cache hit
-/// the topic_subscriptions query is skipped entirely; on a miss the query runs and
+/// the event_subscriptions query is skipped entirely; on a miss the query runs and
 /// populates the cache. Cache entries are invalidated by the AFTER trigger on
-/// queue.topic_subscriptions.
+/// queue.event_subscriptions.
 ///
 /// msg/headers are converted to DatumWithOid once before SPI so the JSONB datum
 /// passes through without per-queue re-serialization — unlike the PL/pgSQL path
 /// which calls queue.send() N times and pays a datum→serde_json→datum round-trip
 /// per queue.
-#[pg_extern(name = "send_topic", schema = "queue", volatile, parallel_safe)]
-fn send_topic_pgrx(
+#[pg_extern(name = "publish_event", schema = "queue", volatile, parallel_safe)]
+fn publish_event_pgrx(
     routing_key: &str,
     msg: pgrx::JsonB,
     headers: Option<pgrx::JsonB>,
@@ -921,14 +921,14 @@ fn send_topic_pgrx(
             client.update("SET LOCAL synchronous_commit = off", None, &[])?;
         }
 
-        // Cache hit: skip the topic_subscriptions regex scan entirely.
+        // Cache hit: skip the event_subscriptions regex scan entirely.
         let queue_names: Vec<String> =
             if let Some(cached) = unsafe { crate::routing_cache::lookup(routing_key) } {
                 cached
             } else {
                 let names: Vec<String> = client
                     .select(
-                        "SELECT DISTINCT queue_name FROM queue.topic_subscriptions \
+                        "SELECT DISTINCT queue_name FROM queue.event_subscriptions \
                          WHERE $1 ~ compiled_regex ORDER BY queue_name",
                         None,
                         &[routing_key.into()],
@@ -964,13 +964,13 @@ fn send_topic_pgrx(
                 )?
                 .first()
                 .get::<i64>(1)?
-                .unwrap_or_else(|| pgrx::error!("queue.send_topic: no msg_id for {name}"));
+                .unwrap_or_else(|| pgrx::error!("queue.publish_event: no msg_id for {name}"));
             out.push((name.clone(), id));
         }
 
         Ok::<_, spi::Error>((queue_names, out))
     })
-    .unwrap_or_else(|e| pgrx::error!("queue.send_topic: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.publish_event: {e}"));
 
     for name in &queue_names {
         unsafe { crate::waiter::register_notify_after_commit(name) };
@@ -980,13 +980,18 @@ fn send_topic_pgrx(
 }
 
 // ---------------------------------------------------------------------------
-// send_batch_topic  (pgrx hot path — replaces PL/pgSQL loop in schema.sql)
+// publish_event_batch  (pgrx hot path — replaces PL/pgSQL loop in schema.sql)
 // ---------------------------------------------------------------------------
 
 /// Fanout a batch of messages to every queue whose binding matches `routing_key`.
 /// One SPI session: routing cache check (or query on miss) + N batch inserts.
-#[pg_extern(name = "send_batch_topic", schema = "queue", volatile, parallel_safe)]
-fn send_batch_topic_pgrx(
+#[pg_extern(
+    name = "publish_event_batch",
+    schema = "queue",
+    volatile,
+    parallel_safe
+)]
+fn publish_event_batch_pgrx(
     routing_key: &str,
     msgs: pgrx::Array<pgrx::JsonB>,
     headers: Option<pgrx::Array<pgrx::JsonB>>,
@@ -1014,7 +1019,7 @@ fn send_batch_topic_pgrx(
             } else {
                 let mut names = Vec::new();
                 for row in client.select(
-                    "SELECT DISTINCT queue_name FROM queue.topic_subscriptions \
+                    "SELECT DISTINCT queue_name FROM queue.event_subscriptions \
                      WHERE $1 ~ compiled_regex ORDER BY queue_name",
                     None,
                     &[routing_key.into()],
@@ -1059,7 +1064,7 @@ fn send_batch_topic_pgrx(
 
         Ok::<_, spi::Error>((queue_names, out))
     })
-    .unwrap_or_else(|e| pgrx::error!("queue.send_batch_topic: {e}"));
+    .unwrap_or_else(|e| pgrx::error!("queue.publish_event_batch: {e}"));
 
     for name in &queue_names {
         unsafe { crate::waiter::register_notify_after_commit(name) };

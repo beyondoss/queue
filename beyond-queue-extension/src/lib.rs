@@ -10,7 +10,7 @@ mod waiter;
 ///
 /// The extension must be listed in shared_preload_libraries for shared memory to
 /// be available.  Without it, receive falls back to timeout-only polling and
-/// send_topic skips the cache.
+/// publish_event skips the cache.
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     unsafe {

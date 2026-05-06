@@ -1,0 +1,262 @@
+import createFetchClient from "openapi-fetch";
+import { EventError, EventNotFoundError } from "./errors.js";
+import type { components, paths } from "./types.js";
+import { type Camelize, camelize } from "./utils/camelize.js";
+
+export { EventError, EventNotFoundError } from "./errors.js";
+export type { components, paths } from "./types.js";
+export type { Camelize } from "./utils/camelize.js";
+
+// ── Shared types ──────────────────────────────────────────────────────────────
+
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+type ApiResult<T = undefined> = Promise<
+  | { data: T; error: undefined; response: Response }
+  | { data: undefined; error: EventError; response: Response }
+>;
+
+// ── Public SDK types ──────────────────────────────────────────────────────────
+
+export type Subscription = Camelize<components["schemas"]["TopicSubscription"]>;
+
+export type PublishResult = Camelize<
+  components["schemas"]["TopicSendResponse"]
+>;
+
+/**
+ * Identifies the delivery target for a subscription.
+ * - `{ type: 'queue', name }` — enqueue into an existing beyond-queue queue.
+ * - `{ type: 'http', endpoint }` — POST to an HTTP endpoint.
+ * - `{ type: 'https', endpoint }` — POST to an HTTPS endpoint.
+ */
+export type EventTarget =
+  | { type: "queue"; name: string }
+  | { type: "http"; endpoint: string; envelope?: boolean }
+  | { type: "https"; endpoint: string; envelope?: boolean };
+
+export interface PublishOptions {
+  delay?: number;
+  headers?: Record<string, string>;
+}
+
+export interface EventRequestEvent {
+  command: string;
+}
+
+export interface EventResponseEvent {
+  command: string;
+  durationMs: number;
+}
+
+export interface EventClientOptions {
+  /** Base URL of the beyond-queue server, e.g. `"http://localhost:9324"`. */
+  url: string;
+  /**
+   * Authorization header value. Any non-empty string is accepted by the server.
+   * Default: `"Bearer anon"`.
+   */
+  auth?: string;
+  /** Custom `fetch` implementation for test mocking or connection pooling. */
+  fetch?: typeof globalThis.fetch;
+  /** Per-request timeout in milliseconds. */
+  timeout?: number;
+  /** Max retry attempts on transient 5xx failures. Default: 2. */
+  retries?: number;
+  /** Called before each request. */
+  onRequest?: (event: EventRequestEvent) => void;
+  /** Called after each response. */
+  onResponse?: (event: EventResponseEvent) => void;
+}
+
+export interface EventClient {
+  /**
+   * Publish a message to a routing key. All subscriptions whose pattern
+   * matches the routing key receive a copy of the message.
+   */
+  publish(
+    routingKey: string,
+    payload: JsonValue,
+    opts?: PublishOptions,
+  ): ApiResult<PublishResult>;
+
+  subscriptions: {
+    /** Subscribe a queue or HTTP endpoint to a glob pattern. */
+    create(
+      pattern: string,
+      target: EventTarget,
+    ): ApiResult<Subscription>;
+
+    /** List all subscriptions for an exact pattern. */
+    list(pattern: string): ApiResult<Subscription[]>;
+
+    /** Remove a subscription by ID. Idempotent — no error if already gone. */
+    delete(id: number): ApiResult;
+  };
+
+  /** Release underlying connections. Call when the client is no longer needed. */
+  close(): Promise<void>;
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+function toEventError(error: unknown, status: number): EventError {
+  if (typeof error === "object" && error !== null && "error" in error) {
+    const e =
+      (error as { error: { code?: string; message?: string; hint?: string } })
+        .error;
+    if (status === 404) return new EventNotFoundError(e?.hint ?? undefined);
+    return new EventError(
+      e?.code ?? "unknown_error",
+      e?.message ?? "Unknown error",
+      status,
+      e?.hint ?? undefined,
+    );
+  }
+  return new EventError("unknown_error", String(error), status);
+}
+
+function wrap<T>(
+  promise: Promise<{ data?: T; error?: unknown; response: Response }>,
+): ApiResult<Camelize<T>> {
+  return promise.then(({ data, error, response }) => {
+    if (error !== undefined) {
+      return {
+        data: undefined,
+        error: toEventError(error, response.status),
+        response,
+      };
+    }
+    return {
+      data: data !== undefined
+        ? (camelize(data) as Camelize<T>)
+        : (undefined as unknown as Camelize<T>),
+      error: undefined,
+      response,
+    };
+  }) as unknown as ApiResult<Camelize<T>>;
+}
+
+function buildFetch(
+  base: typeof globalThis.fetch | undefined,
+  retries: number,
+  timeout: number | undefined,
+): typeof globalThis.fetch {
+  const fetchFn = base ?? globalThis.fetch;
+  return async (input, init) => {
+    const signal = timeout != null
+      ? AbortSignal.timeout(timeout)
+      : init?.signal;
+    const initWithSignal = signal != null ? { ...init, signal } : init;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt > 0) {
+        await new Promise<void>((r) => setTimeout(r, 100 * 2 ** (attempt - 1)));
+      }
+      let res: Response;
+      try {
+        res = await fetchFn(input, initWithSignal);
+      } catch (err) {
+        if (attempt >= retries) throw err;
+        continue;
+      }
+      if (res.status >= 500 && attempt < retries) {
+        await res.body?.cancel();
+        continue;
+      }
+      return res;
+    }
+    throw new Error("unreachable");
+  };
+}
+
+// ── Factory ───────────────────────────────────────────────────────────────────
+
+/** Creates an event client backed by the beyond-queue HTTP API. */
+export function createEventClient(opts: EventClientOptions): EventClient {
+  const base = opts.url.replace(/\/+$/, "");
+  const { onRequest, onResponse } = opts;
+
+  const client = createFetchClient<paths>({
+    baseUrl: base,
+    headers: { Authorization: opts.auth ?? "Bearer anon" },
+    fetch: buildFetch(opts.fetch, opts.retries ?? 2, opts.timeout),
+  });
+
+  function cmd<A extends unknown[], R>(
+    name: string,
+    fn: (...args: A) => Promise<R>,
+  ): (...args: A) => Promise<R> {
+    return async (...args) => {
+      onRequest?.({ command: name });
+      const start = Date.now();
+      try {
+        return await fn(...args);
+      } finally {
+        onResponse?.({ command: name, durationMs: Date.now() - start });
+      }
+    };
+  }
+
+  return {
+    publish: cmd("publish", (routingKey, payload, pOpts) =>
+      wrap(
+        client.POST("/v1/events/{routing_key}", {
+          params: { path: { routing_key: routingKey } },
+          body: {
+            message: payload as Record<string, never>,
+            delay: pOpts?.delay ?? 0,
+            headers: (pOpts?.headers ?? null) as Record<string, never> | null,
+          },
+        }),
+      )),
+
+    subscriptions: {
+      create: cmd("subscriptions.create", (pattern, target) => {
+        const body: components["schemas"]["SubscribeRequest"] =
+          target.type === "queue"
+            ? { queue_name: target.name }
+            : {
+              protocol: target.type,
+              endpoint: target.endpoint,
+              envelope: target.envelope ?? false,
+            };
+        return wrap(
+          client.POST("/v1/events/{pattern}/subscriptions", {
+            params: { path: { pattern } },
+            body,
+          }),
+        );
+      }),
+
+      list: cmd("subscriptions.list", (pattern) =>
+        wrap(
+          client.GET("/v1/events/{pattern}/subscriptions", {
+            params: { path: { pattern } },
+          }),
+        )),
+
+      delete: cmd("subscriptions.delete", async (id) => {
+        const { error, response } = await client.DELETE(
+          "/v1/events/{pattern}/subscriptions/{id}",
+          { params: { path: { pattern: "_", id } } },
+        );
+        if (error && response.status !== 404) {
+          return {
+            data: undefined,
+            error: toEventError(error, response.status),
+            response,
+          };
+        }
+        return { data: undefined, error: undefined, response };
+      }),
+    },
+
+    close: () => Promise.resolve(),
+  };
+}

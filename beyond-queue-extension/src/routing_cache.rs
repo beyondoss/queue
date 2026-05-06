@@ -1,8 +1,8 @@
 //! Generation-based routing cache in shared memory.
 //!
-//! Caches topic_subscriptions lookups: routing_key → Vec<queue_name>.
+//! Caches event_subscriptions lookups: routing_key → Vec<queue_name>.
 //! 256 direct-mapped slots (FNV-1a hash-indexed). A single global generation
-//! counter is incremented on any topic_subscriptions write; slots stamped with a
+//! counter is incremented on any event_subscriptions write; slots stamped with a
 //! stale generation are treated as misses.
 //!
 //! ## Concurrency
@@ -12,7 +12,7 @@
 //! - invalidate: exclusive LWLock — O(1) generation bump only
 //!
 //! Hash collisions evict: the newer routing key simply overwrites the slot.
-//! Correctness is unaffected — a miss just re-runs the topic_subscriptions query.
+//! Correctness is unaffected — a miss just re-runs the event_subscriptions query.
 //!
 //! ## Degraded mode
 //!
@@ -238,10 +238,10 @@ pub unsafe fn invalidate() {
 }
 
 // ---------------------------------------------------------------------------
-// pg_extern — called by the topic_subscriptions invalidation trigger
+// pg_extern — called by the event_subscriptions invalidation trigger
 // ---------------------------------------------------------------------------
 
-/// Called by the AFTER INSERT/UPDATE/DELETE trigger on queue.topic_subscriptions.
+/// Called by the AFTER INSERT/UPDATE/DELETE trigger on queue.event_subscriptions.
 /// Bumps the routing cache generation so all cached routes are treated as stale.
 #[pgrx::pg_extern(name = "_invalidate_routing_cache", schema = "queue", volatile)]
 fn invalidate_routing_cache_fn() {

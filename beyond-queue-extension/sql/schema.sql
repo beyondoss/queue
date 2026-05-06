@@ -28,13 +28,13 @@ CREATE INDEX IF NOT EXISTS idx_notify_throttle_active
     WHERE throttle_interval_ms > 0;
 
 -- Topic binding registry (wildcard routing key → queue or HTTP endpoint)
-CREATE TABLE IF NOT EXISTS queue.topic_subscriptions (
+CREATE TABLE IF NOT EXISTS queue.event_subscriptions (
     id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     pattern        text NOT NULL,
     protocol       text NOT NULL DEFAULT 'sqs',  -- 'sqs' | 'http' | 'https'
     endpoint       text NOT NULL,                -- sqs://{queue_name} for sqs; full URL for http/https
     queue_name     text
-        CONSTRAINT topic_subscriptions_meta_fk
+        CONSTRAINT event_subscriptions_meta_fk
             REFERENCES queue.meta (queue_name) ON DELETE CASCADE,
     bound_at       TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
     raw_delivery   boolean NOT NULL DEFAULT false, -- true = post raw payload; false = SNS envelope
@@ -48,17 +48,16 @@ CREATE TABLE IF NOT EXISTS queue.topic_subscriptions (
             '#', '.*'
         ) || '$'
     ) STORED,
-    CONSTRAINT topic_subscriptions_unique UNIQUE (pattern, endpoint),
-    CONSTRAINT topic_subscriptions_protocol_check CHECK (protocol IN ('sqs', 'http', 'https')),
-    CONSTRAINT topic_subscriptions_sqs_queue_check CHECK (protocol != 'sqs' OR queue_name IS NOT NULL)
+    CONSTRAINT event_subscriptions_unique UNIQUE (pattern, endpoint),
+    CONSTRAINT event_subscriptions_sqs_queue_check CHECK (protocol != 'sqs' OR queue_name IS NOT NULL)
 );
 
 
 -- Pending HTTP/HTTPS deliveries with retry tracking
-CREATE TABLE IF NOT EXISTS queue.http_deliveries (
+CREATE TABLE IF NOT EXISTS queue.event_deliveries (
     id              BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     subscription_id BIGINT NOT NULL
-        REFERENCES queue.topic_subscriptions(id) ON DELETE CASCADE,
+        REFERENCES queue.event_subscriptions(id) ON DELETE CASCADE,
     endpoint        text NOT NULL,
     payload         jsonb NOT NULL,
     attempt         integer NOT NULL DEFAULT 0,
@@ -68,16 +67,16 @@ CREATE TABLE IF NOT EXISTS queue.http_deliveries (
     created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_http_deliveries_pending
-    ON queue.http_deliveries (next_attempt_at ASC)
+CREATE INDEX IF NOT EXISTS idx_event_deliveries_pending
+    ON queue.event_deliveries (next_attempt_at ASC)
     WHERE attempt < max_attempts;
 
 DO $$ BEGIN
-    DROP INDEX IF EXISTS queue.idx_topic_subscriptions_covering;
+    DROP INDEX IF EXISTS queue.idx_event_subscriptions_covering;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_topic_subscriptions_covering
-    ON queue.topic_subscriptions (pattern)
+CREATE INDEX IF NOT EXISTS idx_event_subscriptions_covering
+    ON queue.event_subscriptions (pattern)
     INCLUDE (id, queue_name, endpoint, protocol, raw_delivery, compiled_regex);
 
 DO
@@ -86,8 +85,8 @@ BEGIN
     IF EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'beyond_queue_extension') THEN
         PERFORM pg_catalog.pg_extension_config_dump('queue.meta', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.notify_insert_throttle', '');
-        PERFORM pg_catalog.pg_extension_config_dump('queue.topic_subscriptions', '');
-        PERFORM pg_catalog.pg_extension_config_dump('queue.http_deliveries', '');
+        PERFORM pg_catalog.pg_extension_config_dump('queue.event_subscriptions', '');
+        PERFORM pg_catalog.pg_extension_config_dump('queue.event_deliveries', '');
     END IF;
 END
 $$;
@@ -1285,12 +1284,12 @@ BEGIN
             RAISE EXCEPTION 'Queue "%" does not exist', queue_name USING ERRCODE = 'Q0001';
         END IF;
     END IF;
-    INSERT INTO queue.topic_subscriptions (pattern, protocol, endpoint, queue_name, raw_delivery)
+    INSERT INTO queue.event_subscriptions (pattern, protocol, endpoint, queue_name, raw_delivery)
     VALUES (subscribe.pattern, subscribe.protocol, subscribe.endpoint, subscribe.queue_name, subscribe.raw_delivery)
-    ON CONFLICT ON CONSTRAINT topic_subscriptions_unique DO NOTHING;
+    ON CONFLICT ON CONSTRAINT event_subscriptions_unique DO NOTHING;
     RETURN QUERY
         SELECT ts.id, ts.pattern, ts.protocol, ts.endpoint, ts.queue_name, ts.bound_at, ts.raw_delivery
-        FROM queue.topic_subscriptions ts
+        FROM queue.event_subscriptions ts
         WHERE ts.pattern = subscribe.pattern AND ts.endpoint = subscribe.endpoint;
 END;
 $$;
@@ -1302,9 +1301,9 @@ DECLARE
 BEGIN
     IF pattern IS NULL OR pattern = '' THEN RAISE EXCEPTION 'pattern cannot be NULL or empty'; END IF;
     IF endpoint IS NULL OR endpoint = '' THEN RAISE EXCEPTION 'endpoint cannot be NULL or empty'; END IF;
-    DELETE FROM queue.topic_subscriptions
-    WHERE topic_subscriptions.pattern = unsubscribe.pattern
-      AND topic_subscriptions.endpoint = unsubscribe.endpoint;
+    DELETE FROM queue.event_subscriptions
+    WHERE event_subscriptions.pattern = unsubscribe.pattern
+      AND event_subscriptions.endpoint = unsubscribe.endpoint;
     GET DIAGNOSTICS rows_deleted = ROW_COUNT;
     RETURN rows_deleted > 0;
 END;
@@ -1317,39 +1316,39 @@ BEGIN
     PERFORM queue.validate_routing_key(routing_key);
     RETURN QUERY
         SELECT b.pattern, b.queue_name, b.compiled_regex
-        FROM queue.topic_subscriptions b
+        FROM queue.event_subscriptions b
         WHERE routing_key ~ b.compiled_regex
         ORDER BY b.pattern;
 END;
 $$;
 
--- Canonical send_topic(TEXT, JSONB, JSONB, TIMESTAMPTZ, BOOLEAN) is defined in hot_paths.sql
+-- Canonical publish_event(TEXT, JSONB, JSONB, TIMESTAMPTZ, BOOLEAN) is defined in hot_paths.sql
 -- (PL/pgSQL stub) and replaced by the pgrx C function via load_pgrx_extension.sql.
 -- plpgsql is used so the reference to the canonical is resolved at call time, not at
 -- CREATE FUNCTION time (the canonical is loaded after this file).
 
-DROP FUNCTION IF EXISTS queue.send_topic(text, jsonb, jsonb, integer);
-CREATE FUNCTION queue.send_topic(routing_key text, msg jsonb, headers jsonb, delay integer)
+DROP FUNCTION IF EXISTS queue.publish_event(text, jsonb, jsonb, integer);
+CREATE FUNCTION queue.publish_event(routing_key text, msg jsonb, headers jsonb, delay integer)
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN QUERY SELECT * FROM queue.send_topic(routing_key, msg, headers,
+    RETURN QUERY SELECT * FROM queue.publish_event(routing_key, msg, headers,
         clock_timestamp() + make_interval(secs => delay));
 END;
 $$;
 
-DROP FUNCTION IF EXISTS queue.send_topic(text, jsonb);
-CREATE FUNCTION queue.send_topic(routing_key text, msg jsonb)
+DROP FUNCTION IF EXISTS queue.publish_event(text, jsonb);
+CREATE FUNCTION queue.publish_event(routing_key text, msg jsonb)
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN QUERY SELECT * FROM queue.send_topic(routing_key, msg, NULL::jsonb, clock_timestamp());
+    RETURN QUERY SELECT * FROM queue.publish_event(routing_key, msg, NULL::jsonb, clock_timestamp());
 END;
 $$;
 
-DROP FUNCTION IF EXISTS queue.send_topic(text, jsonb, integer);
-CREATE FUNCTION queue.send_topic(routing_key text, msg jsonb, delay integer)
+DROP FUNCTION IF EXISTS queue.publish_event(text, jsonb, integer);
+CREATE FUNCTION queue.publish_event(routing_key text, msg jsonb, delay integer)
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    RETURN QUERY SELECT * FROM queue.send_topic(routing_key, msg, NULL::jsonb,
+    RETURN QUERY SELECT * FROM queue.publish_event(routing_key, msg, NULL::jsonb,
         clock_timestamp() + make_interval(secs => delay));
 END;
 $$;
@@ -1358,7 +1357,7 @@ CREATE OR REPLACE FUNCTION queue.list_subscriptions()
 RETURNS TABLE (id bigint, pattern text, protocol text, endpoint text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, raw_delivery boolean)
 LANGUAGE sql STABLE AS $$
     SELECT id, pattern, protocol, endpoint, queue_name, bound_at, raw_delivery
-    FROM queue.topic_subscriptions
+    FROM queue.event_subscriptions
     ORDER BY bound_at DESC, pattern, endpoint;
 $$;
 
@@ -1366,7 +1365,7 @@ CREATE OR REPLACE FUNCTION queue.list_subscriptions(queue_name text)
 RETURNS TABLE (id bigint, pattern text, protocol text, endpoint text, queue_name text, bound_at TIMESTAMP WITH TIME ZONE, raw_delivery boolean)
 LANGUAGE sql STABLE AS $$
     SELECT tb.id, tb.pattern, tb.protocol, tb.endpoint, tb.queue_name, tb.bound_at, tb.raw_delivery
-    FROM queue.topic_subscriptions tb
+    FROM queue.event_subscriptions tb
     WHERE tb.queue_name = list_subscriptions.queue_name
     ORDER BY bound_at DESC, pattern;
 $$;
@@ -1375,7 +1374,7 @@ $$;
 -- raw_msg: the original message payload.
 -- envelope_msg: the SNS notification envelope (NULL = always use raw_msg).
 -- Stores raw_msg or envelope_msg per subscription's raw_delivery flag.
-CREATE OR REPLACE FUNCTION queue.queue_http_deliveries(
+CREATE OR REPLACE FUNCTION queue.queue_event_deliveries(
     routing_key  text,
     raw_msg      jsonb,
     envelope_msg jsonb DEFAULT NULL
@@ -1383,10 +1382,10 @@ CREATE OR REPLACE FUNCTION queue.queue_http_deliveries(
 DECLARE
     n bigint;
 BEGIN
-    INSERT INTO queue.http_deliveries (subscription_id, endpoint, payload)
+    INSERT INTO queue.event_deliveries (subscription_id, endpoint, payload)
     SELECT ts.id, ts.endpoint,
            CASE WHEN ts.raw_delivery OR envelope_msg IS NULL THEN raw_msg ELSE envelope_msg END
-    FROM queue.topic_subscriptions ts
+    FROM queue.event_subscriptions ts
     WHERE routing_key ~ ts.compiled_regex
       AND ts.protocol IN ('http', 'https');
     GET DIAGNOSTICS n = ROW_COUNT;
@@ -1394,7 +1393,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.send_batch_topic(
+CREATE OR REPLACE FUNCTION queue.publish_event_batch(
     routing_key text, msgs jsonb[], headers jsonb[], delay TIMESTAMP WITH TIME ZONE,
     sync_commit boolean DEFAULT TRUE
 )
@@ -1406,7 +1405,7 @@ BEGIN
     PERFORM queue.validate_routing_key(routing_key);
     PERFORM queue._validate_batch_params(msgs, headers);
     FOR b IN
-        SELECT DISTINCT tb.queue_name FROM queue.topic_subscriptions tb
+        SELECT DISTINCT tb.queue_name FROM queue.event_subscriptions tb
         WHERE routing_key ~ tb.compiled_regex
           AND tb.queue_name IS NOT NULL
         ORDER BY tb.queue_name
@@ -1418,24 +1417,24 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION queue.send_batch_topic(routing_key text, msgs jsonb[])
+CREATE OR REPLACE FUNCTION queue.publish_event_batch(routing_key text, msgs jsonb[])
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE sql VOLATILE AS $$
-    SELECT * FROM queue.send_batch_topic(routing_key, msgs, NULL, clock_timestamp());
+    SELECT * FROM queue.publish_event_batch(routing_key, msgs, NULL, clock_timestamp());
 $$;
 
-CREATE OR REPLACE FUNCTION queue.send_batch_topic(routing_key text, msgs jsonb[], headers jsonb[])
+CREATE OR REPLACE FUNCTION queue.publish_event_batch(routing_key text, msgs jsonb[], headers jsonb[])
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE sql VOLATILE AS $$
-    SELECT * FROM queue.send_batch_topic(routing_key, msgs, headers, clock_timestamp());
+    SELECT * FROM queue.publish_event_batch(routing_key, msgs, headers, clock_timestamp());
 $$;
 
-CREATE OR REPLACE FUNCTION queue.send_batch_topic(routing_key text, msgs jsonb[], delay integer)
+CREATE OR REPLACE FUNCTION queue.publish_event_batch(routing_key text, msgs jsonb[], delay integer)
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE sql VOLATILE AS $$
-    SELECT * FROM queue.send_batch_topic(routing_key, msgs, NULL, clock_timestamp() + make_interval(secs => delay));
+    SELECT * FROM queue.publish_event_batch(routing_key, msgs, NULL, clock_timestamp() + make_interval(secs => delay));
 $$;
 
-CREATE OR REPLACE FUNCTION queue.send_batch_topic(routing_key text, msgs jsonb[], headers jsonb[], delay integer)
+CREATE OR REPLACE FUNCTION queue.publish_event_batch(routing_key text, msgs jsonb[], headers jsonb[], delay integer)
 RETURNS TABLE (queue_name text, msg_id bigint) LANGUAGE sql VOLATILE AS $$
-    SELECT * FROM queue.send_batch_topic(routing_key, msgs, headers, clock_timestamp() + make_interval(secs => delay));
+    SELECT * FROM queue.publish_event_batch(routing_key, msgs, headers, clock_timestamp() + make_interval(secs => delay));
 $$;
 
 ------------------------------------------------------------
@@ -1464,11 +1463,11 @@ $$;
 DO $$ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_trigger
-        WHERE tgname = 'topic_subscriptions_cache_invalidate'
-          AND tgrelid = 'queue.topic_subscriptions'::regclass
+        WHERE tgname = 'event_subscriptions_cache_invalidate'
+          AND tgrelid = 'queue.event_subscriptions'::regclass
     ) THEN
-        CREATE TRIGGER topic_subscriptions_cache_invalidate
-            AFTER INSERT OR UPDATE OR DELETE ON queue.topic_subscriptions
+        CREATE TRIGGER event_subscriptions_cache_invalidate
+            AFTER INSERT OR UPDATE OR DELETE ON queue.event_subscriptions
             FOR EACH STATEMENT EXECUTE FUNCTION queue._routing_cache_invalidate_trigger();
     END IF;
 END $$;

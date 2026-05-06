@@ -98,7 +98,7 @@ enum Command {
         /// If provided, runs read_grouped_rr on this separate database.
         #[arg(long)]
         oss_url: Option<String>,
-        /// Also run topic fanout scenarios (send_topic / send_batch_topic).
+        /// Also run event fanout scenarios (publish_event / send_batch_event).
         #[arg(long)]
         topic: bool,
     },
@@ -410,7 +410,7 @@ async fn setup_topic_queues(pool: &PgPool, base: &str, n: usize) -> Result<()> {
 // send topic
 // ---------------------------------------------------------------------------
 
-async fn run_send_topic(
+async fn run_publish_event(
     pool: &Arc<PgPool>,
     base: &str,
     n_queues: usize,
@@ -435,7 +435,7 @@ async fn run_send_topic(
             for _ in 0..per_worker {
                 let t = Instant::now();
                 sqlx::query(&format!(
-                    r#"SELECT {}.send_topic($1, '{{"b":1}}'::jsonb, 0)"#,
+                    r#"SELECT {}.publish_event($1, '{{"b":1}}'::jsonb, 0)"#,
                     sc()
                 ))
                 .bind(&routing_key)
@@ -468,10 +468,10 @@ async fn run_send_topic(
 }
 
 // ---------------------------------------------------------------------------
-// send_batch_topic
+// publish_event_batch
 // ---------------------------------------------------------------------------
 
-async fn run_send_batch_topic(
+async fn run_publish_event_batch(
     pool: &Arc<PgPool>,
     base: &str,
     n_queues: usize,
@@ -501,7 +501,7 @@ async fn run_send_batch_topic(
             for _ in 0..ops_per_worker {
                 let t = Instant::now();
                 sqlx::query(&format!(
-                    "SELECT * FROM {}.send_batch_topic($1, $2::jsonb[], 0)",
+                    "SELECT * FROM {}.publish_event_batch($1, $2::jsonb[], 0)",
                     sc()
                 ))
                 .bind(&routing_key)
@@ -1174,23 +1174,23 @@ async fn run_all(
         // setup_topic_queues is additive: running n=1 then n=4 reuses the first queue.
         scenario!(
             format!("send-topic n=1  c=1  ({send_n} ops)"),
-            run_send_topic(pool, "bench_topic", 1, send_n, 1, async_commit)
+            run_publish_event(pool, "bench_topic", 1, send_n, 1, async_commit)
         );
         scenario!(
             format!("send-topic n=4  c=1  ({send_n} ops)"),
-            run_send_topic(pool, "bench_topic", 4, send_n, 1, async_commit)
+            run_publish_event(pool, "bench_topic", 4, send_n, 1, async_commit)
         );
         scenario!(
             format!("send-topic n=16 c=1  ({send_n} ops)"),
-            run_send_topic(pool, "bench_topic", 16, send_n, 1, async_commit)
+            run_publish_event(pool, "bench_topic", 16, send_n, 1, async_commit)
         );
         scenario!(
             format!("send-topic n=4  c=8  ({send_n} ops)"),
-            run_send_topic(pool, "bench_topic", 4, send_n, 8, async_commit)
+            run_publish_event(pool, "bench_topic", 4, send_n, 8, async_commit)
         );
         scenario!(
             format!("send-topic n=16 c=8  ({send_n} ops)"),
-            run_send_topic(pool, "bench_topic", 16, send_n, 8, async_commit)
+            run_publish_event(pool, "bench_topic", 16, send_n, 8, async_commit)
         );
 
         tracing::info!("=== topic batch send ===");
@@ -1198,15 +1198,15 @@ async fn run_all(
         // the existing batch-send metric — n_queues tells you the fanout factor.
         scenario!(
             format!("send-topic b=100 n=4  c=1  ({send_n} msgs)"),
-            run_send_batch_topic(pool, "bench_topic_b", 4, 100, send_n, 1, async_commit)
+            run_publish_event_batch(pool, "bench_topic_b", 4, 100, send_n, 1, async_commit)
         );
         scenario!(
             format!("send-topic b=100 n=16 c=1  ({send_n} msgs)"),
-            run_send_batch_topic(pool, "bench_topic_b", 16, 100, send_n, 1, async_commit)
+            run_publish_event_batch(pool, "bench_topic_b", 16, 100, send_n, 1, async_commit)
         );
         scenario!(
             format!("send-topic b=100 n=4  c=8  ({send_n} msgs)"),
-            run_send_batch_topic(pool, "bench_topic_b", 4, 100, send_n, 8, async_commit)
+            run_publish_event_batch(pool, "bench_topic_b", 4, 100, send_n, 8, async_commit)
         );
     }
 

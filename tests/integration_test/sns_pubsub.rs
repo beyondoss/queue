@@ -75,7 +75,7 @@ async fn test_sns_signature_is_cryptographically_valid() {
 
     client
         .post(
-            "/v1/topics/sigcheck.*/subscriptions",
+            "/v1/events/sigcheck.*/subscriptions",
             &serde_json::json!({ "protocol": "https", "endpoint": webhook.url, "envelope": true }),
         )
         .await
@@ -83,7 +83,7 @@ async fn test_sns_signature_is_cryptographically_valid() {
 
     client
         .post(
-            "/v1/topics/sigcheck.test",
+            "/v1/events/sigcheck.test",
             &serde_json::json!({ "message": { "verify": "me" } }),
         )
         .await
@@ -219,7 +219,7 @@ async fn test_topic_fanout_multiple_sqs_queues() {
             .assert_status(201);
         client
             .post(
-                "/v1/topics/mfan.*/subscriptions",
+                "/v1/events/mfan.*/subscriptions",
                 &serde_json::json!({ "queue_name": q }),
             )
             .await
@@ -228,7 +228,7 @@ async fn test_topic_fanout_multiple_sqs_queues() {
 
     let pub_resp = client
         .post(
-            "/v1/topics/mfan.event",
+            "/v1/events/mfan.event",
             &serde_json::json!({ "message": { "broadcast": true } }),
         )
         .await
@@ -268,7 +268,7 @@ async fn test_topic_wildcard_routing() {
         .assert_status(201);
     client
         .post(
-            "/v1/topics/wc.star.*/subscriptions",
+            "/v1/events/wc.star.*/subscriptions",
             &serde_json::json!({ "queue_name": "test_wc_star_q" }),
         )
         .await
@@ -285,7 +285,7 @@ async fn test_topic_wildcard_routing() {
         .assert_status(201);
     client
         .post(
-            "/v1/topics/wc.star.%23/subscriptions",
+            "/v1/events/wc.star.%23/subscriptions",
             &serde_json::json!({ "queue_name": "test_wc_hash_q" }),
         )
         .await
@@ -294,7 +294,7 @@ async fn test_topic_wildcard_routing() {
     // "wc.star.foo" → matches both wc.star.* (one segment) and wc.star.# (any)
     let r1 = client
         .post(
-            "/v1/topics/wc.star.foo",
+            "/v1/events/wc.star.foo",
             &serde_json::json!({ "message": { "t": 1 } }),
         )
         .await
@@ -308,7 +308,7 @@ async fn test_topic_wildcard_routing() {
     // "wc.star.foo.bar" — * does not cross dots, # does; only hash_q receives this
     let r2 = client
         .post(
-            "/v1/topics/wc.star.foo.bar",
+            "/v1/events/wc.star.foo.bar",
             &serde_json::json!({ "message": { "t": 2 } }),
         )
         .await
@@ -350,7 +350,7 @@ async fn test_topic_publish_with_no_subscribers() {
 
     let res = client
         .post(
-            "/v1/topics/no.subscribers.ever",
+            "/v1/events/no.subscribers.ever",
             &serde_json::json!({ "message": { "x": 1 } }),
         )
         .await
@@ -440,7 +440,7 @@ async fn test_get_queue_subscriptions() {
     // Bind the queue to a topic pattern.
     client
         .post(
-            "/v1/topics/test.qsubs.topic/subscriptions",
+            "/v1/events/test.qsubs.topic/subscriptions",
             &serde_json::json!({ "queue_name": "test_qsubs_q" }),
         )
         .await

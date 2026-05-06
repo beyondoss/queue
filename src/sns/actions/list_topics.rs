@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 
 use crate::AppState;
-use crate::ops::topic;
+use crate::ops::event;
 use crate::sns::context::SnsContext;
 use crate::sns::error::SnsError;
 use crate::sns::types::{ListTopicsResponse, TopicEntry};
@@ -11,7 +11,7 @@ pub async fn handle(
     State(state): State<AppState>,
     ctx: SnsContext,
 ) -> Result<impl IntoResponse, SnsError> {
-    let names = topic::list_sns_topics(&state.pool)
+    let names = event::list_sns_topics(&state.pool)
         .await
         .map_err(|e| ctx.internal_error(e))?;
 

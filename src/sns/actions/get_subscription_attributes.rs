@@ -4,7 +4,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 
 use crate::AppState;
-use crate::ops::topic;
+use crate::ops::event;
 use crate::sns::context::SnsContext;
 use crate::sns::error::{SnsError, SnsErrorCode};
 use crate::sns::types::{GetSubscriptionAttributesRequest, GetSubscriptionAttributesResponse};
@@ -19,11 +19,11 @@ pub async fn handle(
         .ok_or_else(|| ctx.error(SnsErrorCode::InvalidParameter))?;
 
     let sub = if let Ok(id) = key.parse::<i64>() {
-        topic::get_by_id(&state.pool, id)
+        event::get_by_id(&state.pool, id)
             .await
             .map_err(|e| ctx.internal_error(e))?
     } else {
-        topic::get_by_queue(&state.pool, &topic_name, &key)
+        event::get_by_queue(&state.pool, &topic_name, &key)
             .await
             .map_err(|e| ctx.internal_error(e))?
     }

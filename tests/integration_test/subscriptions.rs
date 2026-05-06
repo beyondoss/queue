@@ -15,7 +15,7 @@ async fn test_sqs_subscriptions_unaffected_by_http_delivery() {
 
     client
         .post(
-            "/v1/topics/sqs.fanout.*/subscriptions",
+            "/v1/events/sqs.fanout.*/subscriptions",
             &serde_json::json!({ "queue_name": "test_http_sqs_fanout_q" }),
         )
         .await
@@ -23,7 +23,7 @@ async fn test_sqs_subscriptions_unaffected_by_http_delivery() {
 
     client
         .post(
-            "/v1/topics/sqs.fanout.event",
+            "/v1/events/sqs.fanout.event",
             &serde_json::json!({ "message": { "data": "hello" } }),
         )
         .await
@@ -137,7 +137,7 @@ async fn test_subscribe_invalid_protocol_returns_400() {
 
     let res = client
         .post(
-            "/v1/topics/test.invalid.proto/subscriptions",
+            "/v1/events/test.invalid.proto/subscriptions",
             &serde_json::json!({
                 "protocol": "smtp",
                 "endpoint": "smtp://mail.example.com",
@@ -153,7 +153,7 @@ async fn test_unsubscribe_nonexistent_returns_404() {
     let client = TestClient::new();
 
     let res = client
-        .delete("/v1/topics/test.pattern/subscriptions/999999999")
+        .delete("/v1/events/test.pattern/subscriptions/999999999")
         .await;
     res.assert_status(404);
 }

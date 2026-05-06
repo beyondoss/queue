@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 
 use crate::AppState;
-use crate::ops::topic::{self, TopicSubscription};
+use crate::ops::event::{self, TopicSubscription};
 use crate::sns::context::SnsContext;
 use crate::sns::error::SnsError;
 use crate::sns::types::{ListSubscriptionsResponse, SubscriptionEntry};
@@ -11,7 +11,7 @@ pub async fn handle(
     State(state): State<AppState>,
     ctx: SnsContext,
 ) -> Result<impl IntoResponse, SnsError> {
-    let subs = topic::list_all_subscriptions(&state.pool)
+    let subs = event::list_all_subscriptions(&state.pool)
         .await
         .map_err(|e| ctx.internal_error(e))?;
 

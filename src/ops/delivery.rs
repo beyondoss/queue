@@ -61,7 +61,7 @@ async fn deliver_batch(
                    payload         AS "payload!: serde_json::Value",
                    attempt         AS "attempt!",
                    max_attempts    AS "max_attempts!"
-               FROM queue.http_deliveries
+               FROM queue.event_deliveries
                WHERE next_attempt_at <= now() AND attempt < max_attempts
                ORDER BY next_attempt_at ASC
                LIMIT $1
@@ -82,7 +82,7 @@ async fn deliver_batch(
             Utc::now() + chrono::Duration::seconds(config.delivery_timeout_secs as i64 + 30);
         let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
         sqlx::query!(
-            "UPDATE queue.http_deliveries SET next_attempt_at = $1 WHERE id = ANY($2)",
+            "UPDATE queue.event_deliveries SET next_attempt_at = $1 WHERE id = ANY($2)",
             lease_until,
             &ids as &[i64],
         )
@@ -110,13 +110,13 @@ async fn deliver_batch(
         };
 
         if success {
-            sqlx::query!("DELETE FROM queue.http_deliveries WHERE id = $1", row.id)
+            sqlx::query!("DELETE FROM queue.event_deliveries WHERE id = $1", row.id)
                 .execute(pool)
                 .await?;
         } else {
             let next_attempt_at = Utc::now() + backoff(row.attempt + 1);
             sqlx::query!(
-                r#"UPDATE queue.http_deliveries
+                r#"UPDATE queue.event_deliveries
                    SET attempt = attempt + 1, last_error = $1, next_attempt_at = $2
                    WHERE id = $3"#,
                 error_msg,
