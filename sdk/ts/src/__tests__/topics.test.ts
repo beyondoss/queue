@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { queueClient, uniqueQueue } from "./harness.js";
 
 describe("topics — publish", () => {
-  it("publish with no subscribers returns queues_matched = 0", async () => {
+  it("publish with no subscribers returns queuesMatched = 0", async () => {
     const q = queueClient();
     const { data } = await q.publish(
       `no.subscribers.${uniqueQueue()}`,
       "message",
     );
-    expect(data?.queues_matched).toBe(0);
+    expect(data?.queuesMatched).toBe(0);
   });
 
   it("publish routes message to a subscribed queue", async () => {
@@ -19,7 +19,7 @@ describe("topics — publish", () => {
     await q.subscribe(pattern, qName);
 
     const { data } = await q.publish(pattern, "hello");
-    expect(data?.queues_matched).toBe(1);
+    expect(data?.queuesMatched).toBe(1);
 
     const { data: messages } = await q.receiveMessages(qName);
     expect(messages).toHaveLength(1);
@@ -38,7 +38,7 @@ describe("topics — publish", () => {
     await q.subscribe(pattern, qb);
 
     const { data } = await q.publish(pattern, "broadcast");
-    expect(data?.queues_matched).toBe(2);
+    expect(data?.queuesMatched).toBe(2);
   });
 
   it("publish with headers delivers them to the queue", async () => {
@@ -66,8 +66,8 @@ describe("topics — subscriptions", () => {
     await q.createQueue(qName);
     const { data: sub } = await q.subscribe(pattern, qName);
     expect(sub?.pattern).toBe(pattern);
-    expect(sub?.queue_name).toBe(qName);
-    expect(typeof sub?.bound_at).toBe("string");
+    expect(sub?.queueName).toBe(qName);
+    expect(typeof sub?.boundAt).toBe("string");
   });
 
   it("subscribe is idempotent", async () => {
@@ -86,7 +86,7 @@ describe("topics — subscriptions", () => {
     await q.createQueue(qName);
     await q.subscribe(pattern, qName);
     const { data: subs } = await q.listTopicSubscriptions(pattern);
-    expect(subs?.some((s) => s.queue_name === qName && s.pattern === pattern))
+    expect(subs?.some((s) => s.queueName === qName && s.pattern === pattern))
       .toBe(true);
   });
 
@@ -97,7 +97,7 @@ describe("topics — subscriptions", () => {
     await q.createQueue(qName);
     await q.subscribe(pattern, qName);
     const { data: subs } = await q.listQueueSubscriptions(qName);
-    expect(subs?.some((s) => s.queue_name === qName)).toBe(true);
+    expect(subs?.some((s) => s.queueName === qName)).toBe(true);
   });
 
   it("unsubscribe removes the binding", async () => {
@@ -108,7 +108,7 @@ describe("topics — subscriptions", () => {
     const { data: sub } = await q.subscribe(pattern, qName);
     await q.unsubscribe(sub!.id);
     const { data: subs } = await q.listTopicSubscriptions(pattern);
-    expect(subs?.some((s) => s.queue_name === qName)).toBe(false);
+    expect(subs?.some((s) => s.queueName === qName)).toBe(false);
   });
 
   it("unsubscribe on a missing binding returns no error", async () => {
@@ -126,6 +126,6 @@ describe("topics — subscriptions", () => {
     const { data: sub } = await q.subscribe(pattern, qName);
     await q.unsubscribe(sub!.id);
     const { data } = await q.publish(pattern, "ghost message");
-    expect(data?.queues_matched).toBe(0);
+    expect(data?.queuesMatched).toBe(0);
   });
 });

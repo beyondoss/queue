@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { queueClient, uniqueQueue } from "./harness.js";
 
 describe("queue management — create / list / get / delete", () => {
-  it("createQueue returns a queue_url containing the queue name", async () => {
+  it("createQueue returns a queueUrl containing the queue name", async () => {
     const q = queueClient();
     const name = uniqueQueue();
     const { data } = await q.createQueue(name);
-    expect(data?.queue_url).toContain(name);
+    expect(data?.queueUrl).toContain(name);
   });
 
   it("createQueue is idempotent", async () => {
@@ -31,8 +31,8 @@ describe("queue management — create / list / get / delete", () => {
     const { data: queues } = await q.listQueues();
     const found = queues?.find((qu) => qu.name === name);
     expect(found).toBeDefined();
-    expect(typeof found!.is_partitioned).toBe("boolean");
-    expect(typeof found!.created_at).toBe("string");
+    expect(typeof found!.isPartitioned).toBe("boolean");
+    expect(typeof found!.createdAt).toBe("string");
   });
 
   it("getQueue returns stats for an existing queue", async () => {
@@ -40,9 +40,9 @@ describe("queue management — create / list / get / delete", () => {
     const name = uniqueQueue();
     await q.createQueue(name);
     const { data: stats } = await q.getQueueStats(name);
-    expect(stats?.queue_length).toBeGreaterThanOrEqual(0);
-    expect(stats?.total_messages).toBeGreaterThanOrEqual(0);
-    expect(typeof stats?.scrape_time).toBe("string");
+    expect(stats?.queueLength).toBeGreaterThanOrEqual(0);
+    expect(stats?.totalMessages).toBeGreaterThanOrEqual(0);
+    expect(typeof stats?.scrapeTime).toBe("string");
   });
 
   it("getQueue returns an error for a missing queue", async () => {

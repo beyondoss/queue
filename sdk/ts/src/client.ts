@@ -1,15 +1,21 @@
 import createFetchClient from "openapi-fetch";
 import type { components, paths } from "./types.js";
+import { type Camelize, camelize } from "./utils/camelize.js";
 
 export type { components, operations, paths } from "./types.js";
+export type { Camelize } from "./utils/camelize.js";
 
-// Types derived from the generated OpenAPI schema
-export type Queue = components["schemas"]["QueueResponse"];
-export type QueueStats = components["schemas"]["QueueMetricsResponse"];
-export type Message = components["schemas"]["MessageResponse"];
-export type Subscription = components["schemas"]["TopicSubscription"];
-export type BatchEntry = components["schemas"]["SendRequest"];
-export type PublishResult = components["schemas"]["TopicSendResponse"];
+// ── Types derived from the generated OpenAPI schema ───────────────────────────
+
+export type Queue = Camelize<components["schemas"]["QueueResponse"]>;
+export type QueueStats = Camelize<
+  components["schemas"]["QueueMetricsResponse"]
+>;
+export type Message = Camelize<components["schemas"]["MessageResponse"]>;
+export type Subscription = Camelize<components["schemas"]["TopicSubscription"]>;
+export type PublishResult = Camelize<
+  components["schemas"]["TopicSendResponse"]
+>;
 
 export type JsonValue =
   | string
@@ -19,7 +25,8 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-// SDK-level option types (not part of the API schema)
+// ── SDK-level option types (not part of the API schema) ───────────────────────
+
 export interface CreateQueueOptions {
   fifo?: boolean;
 }
@@ -27,8 +34,15 @@ export interface CreateQueueOptions {
 export interface SendOptions {
   headers?: JsonValue;
   delay?: number;
-  group_id?: string;
-  async_commit?: boolean;
+  groupId?: string;
+  asyncCommit?: boolean;
+}
+
+export interface BatchEntry {
+  message: JsonValue;
+  delay?: number;
+  groupId?: string;
+  headers?: JsonValue;
 }
 
 export interface ReceiveOptions {
@@ -84,11 +98,13 @@ export interface QueueClient {
   createQueue(
     name: string,
     opts?: CreateQueueOptions,
-  ): ApiResult<{ queue_url: string }>;
+  ): ApiResult<{ queueUrl: string }>;
   listQueues(): ApiResult<Queue[]>;
   getQueueStats(name: string): ApiResult<QueueStats>;
   deleteQueue(name: string): ApiResult;
-  purgeQueue(name: string): ApiResult<components["schemas"]["PurgeResponse"]>;
+  purgeQueue(
+    name: string,
+  ): ApiResult<Camelize<components["schemas"]["PurgeResponse"]>>;
 
   // ── Messages ──────────────────────────────────────────────────────────────
   sendMessage(
@@ -99,19 +115,19 @@ export interface QueueClient {
   sendBatch(
     queue: string,
     entries: BatchEntry[],
-    opts?: { async_commit?: boolean },
+    opts?: { asyncCommit?: boolean },
   ): ApiResult<{ ids: number[] }>;
   receiveMessages(queue: string, opts?: ReceiveOptions): ApiResult<Message[]>;
   deleteMessage(queue: string, id: number): ApiResult;
   deleteMessages(
     queue: string,
     ids: number[],
-  ): ApiResult<components["schemas"]["DeletedResponse"]>;
+  ): ApiResult<Camelize<components["schemas"]["DeletedResponse"]>>;
   changeVisibility(
     queue: string,
     id: number,
     visibilityTimeout: number,
-  ): ApiResult<components["schemas"]["ChangeVisibilityResponse"]>;
+  ): ApiResult<Camelize<components["schemas"]["ChangeVisibilityResponse"]>>;
 
   // ── Topics & subscriptions ────────────────────────────────────────────────
   publish(
@@ -135,12 +151,12 @@ export interface QueueClient {
 
 function wrap<T>(
   promise: Promise<{ data?: T; error?: ApiError; response: Response }>,
-): ApiResult<T> {
+): ApiResult<Camelize<T>> {
   return promise.then(({ data, error, response }) =>
     error !== undefined
       ? { data: undefined, error, response }
-      : { data: data as T, error: undefined, response }
-  ) as unknown as ApiResult<T>;
+      : { data: camelize(data) as Camelize<T>, error: undefined, response }
+  ) as unknown as ApiResult<Camelize<T>>;
 }
 
 function buildFetch(
@@ -209,7 +225,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
       });
       if (error) return { data: undefined, error, response };
       return {
-        data: { queue_url: `${base}/v1/queues/${encodeURIComponent(name)}` },
+        data: { queueUrl: `${base}/v1/queues/${encodeURIComponent(name)}` },
         error: undefined,
         response,
       };
@@ -244,13 +260,13 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         {
           params: {
             path: { name: queue },
-            ...(sOpts?.async_commit && { query: { async_commit: true } }),
+            ...(sOpts?.asyncCommit && { query: { async_commit: true } }),
           },
           body: {
             message,
             delay: sOpts?.delay ?? 0,
             ...(sOpts?.headers !== undefined && { headers: sOpts.headers }),
-            ...(sOpts?.group_id !== undefined && { group_id: sOpts.group_id }),
+            ...(sOpts?.groupId !== undefined && { group_id: sOpts.groupId }),
           },
         },
       );
@@ -264,9 +280,14 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         {
           params: {
             path: { name: queue },
-            ...(bOpts?.async_commit && { query: { async_commit: true } }),
+            ...(bOpts?.asyncCommit && { query: { async_commit: true } }),
           },
-          body: entries,
+          body: entries.map((e) => ({
+            message: e.message,
+            delay: e.delay ?? 0,
+            ...(e.headers !== undefined && { headers: e.headers }),
+            ...(e.groupId !== undefined && { group_id: e.groupId }),
+          })) as components["schemas"]["SendRequest"][],
         },
       );
       if (error) return { data: undefined, error, response };

@@ -130,12 +130,12 @@ describe("messages — content types", () => {
     const { data: msgs } = await q.receiveMessages(name);
     const msg = msgs![0]!;
     expect(typeof msg.id).toBe("number");
-    expect(typeof msg.read_count).toBe("number");
-    expect(typeof msg.enqueued_at).toBe("string");
-    expect(typeof msg.visible_at).toBe("string");
+    expect(typeof msg.readCount).toBe("number");
+    expect(typeof msg.enqueuedAt).toBe("string");
+    expect(typeof msg.visibleAt).toBe("string");
   });
 
-  it("read_count increments on each receive after vt expiry", async () => {
+  it("readCount increments on each receive after vt expiry", async () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.createQueue(name);
@@ -143,18 +143,18 @@ describe("messages — content types", () => {
     const { data: first } = await q.receiveMessages(name, {
       visibilityTimeout: 1,
     });
-    expect(first![0]!.read_count).toBe(1);
+    expect(first![0]!.readCount).toBe(1);
     await new Promise<void>((r) => setTimeout(r, 1100));
     const { data: second } = await q.receiveMessages(name, {
       visibilityTimeout: 1,
     });
     expect(second![0]!.id).toBe(first![0]!.id);
-    expect(second![0]!.read_count).toBe(2);
+    expect(second![0]!.readCount).toBe(2);
   });
 });
 
 describe("messages — change visibility", () => {
-  it("changeVisibility returns updated id and visible_at", async () => {
+  it("changeVisibility returns updated id and visibleAt", async () => {
     const q = queueClient();
     const name = uniqueQueue();
     await q.createQueue(name);
@@ -164,7 +164,7 @@ describe("messages — change visibility", () => {
     });
     const { data } = await q.changeVisibility(name, msgs![0]!.id, 60);
     expect(data?.id).toBe(msgs![0]!.id);
-    expect(typeof data?.visible_at).toBe("string");
+    expect(typeof data?.visibleAt).toBe("string");
   });
 });
 
