@@ -210,9 +210,9 @@ export function createEventClient(opts: EventClientOptions): EventClient {
         client.POST("/v1/events/{routing_key}", {
           params: { path: { routing_key: routingKey } },
           body: {
-            message: payload as Record<string, never>,
+            message: payload,
             delay: pOpts?.delay ?? 0,
-            headers: (pOpts?.headers ?? null) as Record<string, never> | null,
+            headers: pOpts?.headers ?? null,
           },
         }),
       )),

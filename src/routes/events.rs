@@ -19,10 +19,10 @@ use crate::ops::event::{TopicMessage, TopicSubscription};
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct TopicSendRequest {
     /// Message body to fan out to all matching queues and HTTP endpoints. Any JSON value.
-    #[schema(value_type = Object)]
+    #[schema(value_type = serde_json::Value)]
     pub message: serde_json::Value,
     /// Optional metadata to attach to each enqueued copy. Any JSON object.
-    #[schema(nullable, value_type = Object)]
+    #[schema(nullable, value_type = serde_json::Value)]
     pub headers: Option<serde_json::Value>,
     /// Delivery delay in seconds applied to each enqueued message. Default: `0`.
     #[serde(default)]

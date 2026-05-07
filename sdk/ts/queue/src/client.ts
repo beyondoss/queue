@@ -276,11 +276,11 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
             body: {
               message,
               delay: sOpts?.delay ?? 0,
-              ...(sOpts?.headers !== undefined && { headers: sOpts.headers }),
+              headers: sOpts?.headers ?? null,
               ...(sOpts?.groupId !== undefined && {
                 group_id: sOpts.groupId,
               }),
-            } as any,
+            },
           },
         );
         if (error) {
@@ -304,9 +304,9 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
             body: entries.map((e) => ({
               message: e.message,
               delay: e.delay ?? 0,
-              ...(e.headers !== undefined && { headers: e.headers }),
+              headers: e.headers ?? null,
               ...(e.groupId !== undefined && { group_id: e.groupId }),
-            })) as components["schemas"]["SendRequest"][],
+            })),
           },
         );
         if (error) {

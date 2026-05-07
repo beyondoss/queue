@@ -12,11 +12,11 @@ use crate::ops::{delete, receive, send, visibility};
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct SendRequest {
     /// Message body. Any JSON value: object, array, string, number, or boolean.
-    #[schema(value_type = Object)]
+    #[schema(value_type = serde_json::Value)]
     pub message: serde_json::Value,
     /// Optional key-value metadata to attach to the message. Any JSON object. Delivered
     /// alongside the body on receive.
-    #[schema(nullable, value_type = Object)]
+    #[schema(nullable, value_type = serde_json::Value)]
     pub headers: Option<serde_json::Value>,
     /// Delivery delay in seconds. The message becomes visible to receivers after this
     /// many seconds. Default: `0` (immediately visible).
@@ -116,10 +116,10 @@ pub struct MessageResponse {
     /// on each `PATCH /v1/queues/{name}/messages/{id}` call.
     pub visible_at: chrono::DateTime<chrono::Utc>,
     /// Message body as originally sent.
-    #[schema(value_type = Object)]
+    #[schema(value_type = serde_json::Value)]
     pub message: serde_json::Value,
     /// Metadata attached at send time. `null` when none was provided.
-    #[schema(nullable, value_type = Object)]
+    #[schema(nullable, value_type = serde_json::Value)]
     pub headers: Option<serde_json::Value>,
 }
 

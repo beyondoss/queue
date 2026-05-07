@@ -4,8 +4,8 @@
     "title": "Beyond Queue",
     "description": "PostgreSQL-native message queue with SQS-compatible and REST APIs.",
     "license": {
-      "name": "Apache-2.0",
-      "identifier": "Apache-2.0"
+      "name": "license = ",
+      "identifier": "license = "
     },
     "version": "1"
   },
@@ -865,10 +865,6 @@
             "description": "Timestamp when the message was added to the queue."
           },
           "headers": {
-            "type": [
-              "object",
-              "null"
-            ],
             "description": "Metadata attached at send time. `null` when none was provided."
           },
           "id": {
@@ -877,7 +873,6 @@
             "description": "Message ID. Use this to delete or extend the visibility of the message."
           },
           "message": {
-            "type": "object",
             "description": "Message body as originally sent."
           },
           "read_count": {
@@ -1025,14 +1020,9 @@
             "description": "FIFO group identifier. Messages with the same `group_id` are delivered in strict\nenqueue order. Requires a FIFO queue. All messages in a batch must include a\n`group_id` if any do."
           },
           "headers": {
-            "type": [
-              "object",
-              "null"
-            ],
             "description": "Optional key-value metadata to attach to the message. Any JSON object. Delivered\nalongside the body on receive."
           },
           "message": {
-            "type": "object",
             "description": "Message body. Any JSON value: object, array, string, number, or boolean."
           }
         }
@@ -1139,14 +1129,9 @@
             "description": "Delivery delay in seconds applied to each enqueued message. Default: `0`."
           },
           "headers": {
-            "type": [
-              "object",
-              "null"
-            ],
             "description": "Optional metadata to attach to each enqueued copy. Any JSON object."
           },
           "message": {
-            "type": "object",
             "description": "Message body to fan out to all matching queues and HTTP endpoints. Any JSON value."
           }
         }
