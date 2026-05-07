@@ -6,7 +6,7 @@ resolver = "2"
 name = "beyond-queue"
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license = "license = "
 description = "PostgreSQL-native message queue with pgrx hot paths and an SQS-compatible REST API"
 
 [[bin]]

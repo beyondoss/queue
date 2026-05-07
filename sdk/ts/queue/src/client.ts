@@ -66,10 +66,9 @@ export interface QueueClientOptions {
   /** Base URL of the beyond-queue server, e.g. `"http://localhost:9324"`. */
   url: string;
   /**
-   * Authorization header value. Any non-empty string is accepted by the server.
-   * Default: `"Bearer anon"`.
+   * Bearer token for the `Authorization` header. Default: `"anon"`.
    */
-  auth?: string;
+  token?: string;
   /** Custom `fetch` implementation for test mocking or connection pooling. */
   fetch?: typeof globalThis.fetch;
   /** Per-request timeout in milliseconds. */
@@ -193,7 +192,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
 
   const client = createFetchClient<paths>({
     baseUrl: base,
-    headers: { Authorization: opts.auth ?? "Bearer anon" },
+    headers: { Authorization: `Bearer ${opts.token ?? "anon"}` },
     fetch: buildFetch(opts.fetch, opts.retries ?? 2, opts.timeout),
   });
 

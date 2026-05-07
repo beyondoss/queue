@@ -4,9 +4,6 @@
 **/*.rs.bk
 *.pdb
 
-# Cargo
-Cargo.lock
-
 # TypeScript / Node
 node_modules/
 dist/
