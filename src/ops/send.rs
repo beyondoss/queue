@@ -6,6 +6,7 @@ pub struct SendResult {
     pub msg_id: i64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn send_message_fifo(
     pool: &PgPool,
     queue_name: &str,
@@ -28,7 +29,7 @@ pub async fn send_message_fifo(
     )
     .fetch_one(pool)
     .await
-    .map_err(|e| queue_error(e))?;
+    .map_err(queue_error)?;
 
     Ok(SendResult { msg_id: row.msg_id })
 }
@@ -51,7 +52,7 @@ pub async fn send_message(
     )
     .fetch_one(pool)
     .await
-    .map_err(|e| queue_error(e))?;
+    .map_err(queue_error)?;
 
     Ok(SendResult { msg_id: row.msg_id })
 }
@@ -78,7 +79,7 @@ pub async fn send_batch(
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| queue_error(e))?;
+    .map_err(queue_error)?;
 
     Ok(BatchSendResult {
         msg_ids: rows.into_iter().map(|r| r.msg_id).collect(),

@@ -79,11 +79,8 @@ async fn run(pool: PgPool, mut rx: mpsc::Receiver<PendingMessage>, linger_ms: u6
         let deadline = tokio::time::Instant::now() + linger;
         let mut pending: Vec<PendingMessage> = vec![first];
 
-        loop {
-            match tokio::time::timeout_at(deadline, rx.recv()).await {
-                Ok(Some(msg)) => pending.push(msg),
-                _ => break, // timeout or channel closed
-            }
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            pending.push(msg);
         }
 
         flush(&pool, pending).await;

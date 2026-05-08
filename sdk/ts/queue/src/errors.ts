@@ -3,7 +3,7 @@
  *
  * @example
  * ```ts
- * const { error } = await queue.receiveMessages("my-queue")
+ * const { error } = await queue.messages.receive("my-queue")
  * if (error instanceof QueueError) {
  *   console.error(error.code, error.message)
  * }
@@ -13,12 +13,20 @@ export class QueueError extends Error {
   readonly code: string;
   readonly status: number;
   readonly hint: string | undefined;
+  readonly response: Response;
 
-  constructor(code: string, message: string, status: number, hint?: string) {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    response: Response,
+    hint?: string,
+  ) {
     super(message);
     this.name = "QueueError";
     this.code = code;
     this.status = status;
     this.hint = hint;
+    this.response = response;
   }
 }

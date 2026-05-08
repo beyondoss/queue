@@ -16,7 +16,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::from_fn;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -24,6 +24,7 @@ use sqlx::PgPool;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
+use error::ApiError;
 use ops::coalesce::Coalescer;
 use signing::Signer;
 
@@ -40,13 +41,16 @@ pub struct AppState {
     pub signer: Arc<Signer>,
 }
 
-/// Parse an AWS service request body: returns (is_json, action_name, parsed_body).
+/// Parse an AWS service request body: returns `Ok((is_json, action_name, parsed_body))`.
+/// Returns `Err(Response)` if the body claims to be JSON but fails to parse.
 /// `service_prefix` is e.g. `"AmazonSQS."` or `"AmazonSNS."`.
+// Response is large but callers always return it immediately — no stack cost in practice.
+#[allow(clippy::result_large_err)]
 pub fn parse_service_body(
     headers: &HeaderMap,
     body: &Bytes,
     service_prefix: &str,
-) -> (bool, String, serde_json::Value) {
+) -> Result<(bool, String, serde_json::Value), Response> {
     let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -61,13 +65,15 @@ pub fn parse_service_body(
             .strip_prefix(service_prefix)
             .unwrap_or(target)
             .to_string();
-        let value = serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
-        (true, action, value)
+        let value = serde_json::from_slice(body).map_err(|_| {
+            ApiError::BadRequest("invalid JSON request body".into()).into_response()
+        })?;
+        Ok((true, action, value))
     } else {
         let map: HashMap<String, String> = form_urlencoded::parse(body).into_owned().collect();
         let action = map.get("Action").cloned().unwrap_or_default();
         let value = serde_json::to_value(&map).unwrap_or(serde_json::json!({}));
-        (false, action, value)
+        Ok((false, action, value))
     }
 }
 
@@ -76,30 +82,29 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 
     let pool = db::connect(&config.database_url, config.max_connections).await?;
 
-    let mut _coalescer_handle = None;
-    let coalescer = if config.linger_ms > 0 {
+    let (coalescer, coalescer_handle) = if config.linger_ms > 0 {
         tracing::info!(linger_ms = config.linger_ms, "write coalescer enabled");
         let (c, h) = ops::coalesce::start(pool.clone(), config.linger_ms);
-        _coalescer_handle = Some(h);
-        Some(c)
+        (Some(c), Some(h))
     } else {
-        None
+        (None, None)
     };
 
-    let mut _delivery_handle = None;
-    if config.http_delivery_enabled {
+    let delivery_handle = if config.http_delivery_enabled {
         tracing::info!("HTTP delivery worker enabled");
-        _delivery_handle = Some(ops::delivery::start(
+        Some(ops::delivery::start(
             pool.clone(),
             ops::delivery::DeliveryConfig {
                 poll_interval_ms: config.http_delivery_poll_ms,
                 delivery_timeout_secs: config.http_delivery_timeout_secs,
                 batch_size: 50,
             },
-        )?);
-    }
+        )?)
+    } else {
+        None
+    };
 
-    let signer = Arc::new(Signer::generate());
+    let signer = Arc::new(Signer::generate()?);
     let base_url: Arc<str> = config.base_url().into();
     let address = config.address.clone();
     let state = AppState {
@@ -113,8 +118,57 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(&address).await?;
     tracing::info!(address = %address, "listening");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    tracing::info!("draining workers");
+
+    // Delivery: abort the task (lease-based design makes this abort-safe —
+    // any mid-flight rows resurface after their lease expires).
+    if let Some(h) = delivery_handle {
+        h.abort();
+        let _ = h.await;
+    }
+
+    // Coalescer: AppState (and the Coalescer sender) was dropped when axum::serve
+    // returned, closing the channel. The task exits naturally on the next recv().
+    if let Some(h) = coalescer_handle {
+        let _ = h.await;
+    }
+
+    tracing::info!("shutdown complete");
     Ok(())
+}
+
+async fn shutdown_signal() {
+    use tokio::signal;
+
+    let ctrl_c = async {
+        if let Err(e) = signal::ctrl_c().await {
+            tracing::error!(error = %e, "ctrl+c handler failed");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => tracing::error!(error = %e, "failed to install SIGTERM handler"),
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("shutdown signal received, draining connections");
 }
 
 fn is_sns_query_action(action: &str) -> bool {
@@ -199,8 +253,23 @@ async fn serve_signing_cert(State(state): State<AppState>) -> impl IntoResponse 
     )
 }
 
-async fn healthz() -> impl IntoResponse {
-    axum::http::StatusCode::OK
+async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
+    #[derive(serde::Serialize)]
+    struct HealthzResponse {
+        status: &'static str,
+    }
+
+    let db_ok = sqlx::query("SELECT 1").execute(&state.pool).await.is_ok();
+
+    if db_ok {
+        (StatusCode::OK, axum::Json(HealthzResponse { status: "ok" })).into_response()
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(HealthzResponse { status: "degraded" }),
+        )
+            .into_response()
+    }
 }
 
 fn init_tracing(config: &Config) {

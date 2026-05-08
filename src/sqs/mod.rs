@@ -23,7 +23,10 @@ pub fn router() -> Router<AppState> {
 }
 
 pub async fn handle_service_request(state: AppState, headers: HeaderMap, body: Bytes) -> Response {
-    let (is_json, action, parsed) = parse_service_body(&headers, &body, "AmazonSQS.");
+    let (is_json, action, parsed) = match parse_service_body(&headers, &body, "AmazonSQS.") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let protocol = if is_json {
         SqsProtocol::Json
     } else {
@@ -39,7 +42,10 @@ async fn queue_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let (is_json, action, mut parsed) = parse_service_body(&headers, &body, "AmazonSQS.");
+    let (is_json, action, mut parsed) = match parse_service_body(&headers, &body, "AmazonSQS.") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let protocol = if is_json {
         SqsProtocol::Json
     } else {

@@ -108,7 +108,8 @@ export interface EventClient {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function toEventError(error: unknown, status: number): EventError {
+function toEventError(error: unknown, response: Response): EventError {
+  const status = response.status;
   if (typeof error === "object" && error !== null && "error" in error) {
     const e =
       (error as { error: { code?: string; message?: string; hint?: string } })
@@ -117,10 +118,11 @@ function toEventError(error: unknown, status: number): EventError {
       e?.code ?? "unknown_error",
       e?.message ?? "Unknown error",
       status,
+      response,
       e?.hint ?? undefined,
     );
   }
-  return new EventError("unknown_error", String(error), status);
+  return new EventError("unknown_error", String(error), status, response);
 }
 
 function wrap<T>(
@@ -130,7 +132,7 @@ function wrap<T>(
     if (error !== undefined) {
       return {
         data: undefined,
-        error: toEventError(error, response.status),
+        error: toEventError(error, response),
         response,
       };
     }
@@ -257,7 +259,7 @@ export function createEventClient(opts: EventClientOptions): EventClient {
         if (error && response.status !== 404) {
           return {
             data: undefined,
-            error: toEventError(error, response.status),
+            error: toEventError(error, response),
             response,
           };
         }

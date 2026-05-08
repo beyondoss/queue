@@ -11,10 +11,10 @@ fn de_i32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
             f.write_str("integer or string")
         }
         fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<i32, E> {
-            Ok(v as i32)
+            i32::try_from(v).map_err(E::custom)
         }
         fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<i32, E> {
-            Ok(v as i32)
+            i32::try_from(v).map_err(E::custom)
         }
         fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<i32, E> {
             v.parse().map_err(E::custom)

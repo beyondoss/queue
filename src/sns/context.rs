@@ -97,7 +97,7 @@ impl SnsContext {
     pub fn topic_name_from_arn<'a>(&self, arn: &'a str) -> Option<&'a str> {
         if arn.starts_with("arn:") {
             // arn:aws:sns:region:account:name
-            arn.splitn(7, ':').nth(5).filter(|s| !s.is_empty())
+            arn.split(':').nth(5).filter(|s| !s.is_empty())
         } else {
             Some(arn)
         }

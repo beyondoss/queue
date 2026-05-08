@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use rand::rngs::OsRng;
 use rsa::pkcs8::EncodePrivateKey;
 use rsa::sha2::Sha256;
@@ -10,28 +11,27 @@ pub struct Signer {
 }
 
 impl Signer {
-    pub fn generate() -> Self {
+    pub fn generate() -> anyhow::Result<Self> {
         let mut rng = OsRng;
         let private_key =
-            RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate RSA-2048 key");
+            RsaPrivateKey::new(&mut rng, 2048).context("failed to generate RSA-2048 key")?;
 
-        // Serialize private key as PKCS#8 PEM so rcgen can consume it
         let pkcs8_pem = private_key
             .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-            .expect("pkcs8 pem encoding");
+            .context("pkcs8 pem encoding")?;
 
         let key_pair =
-            rcgen::KeyPair::from_pem(pkcs8_pem.as_str()).expect("rcgen key pair from pkcs8");
+            rcgen::KeyPair::from_pem(pkcs8_pem.as_str()).context("rcgen key pair from pkcs8")?;
 
-        let params = rcgen::CertificateParams::new(vec![]).expect("cert params");
-        let cert = params.self_signed(&key_pair).expect("self-signed cert");
+        let params = rcgen::CertificateParams::new(vec![]).context("cert params")?;
+        let cert = params.self_signed(&key_pair).context("self-signed cert")?;
         let cert_pem = cert.pem();
 
         let signing_key = SigningKey::<Sha256>::new(private_key);
-        Self {
+        Ok(Self {
             signing_key,
             cert_pem,
-        }
+        })
     }
 
     pub fn cert_pem(&self) -> &str {

@@ -13,10 +13,7 @@ pub fn strip_fifo_suffix(name: String) -> (String, bool) {
     }
 }
 
-pub fn queue_name_from_url<'a>(
-    queue_url: Option<&'a str>,
-    ctx: &SqsContext,
-) -> Result<String, SqsError> {
+pub fn queue_name_from_url(queue_url: Option<&str>, ctx: &SqsContext) -> Result<String, SqsError> {
     let url = queue_url.ok_or_else(|| ctx.error(SqsErrorCode::NonExistentQueue))?;
     // Expect: http://host:port/000000000000/{queue_name}
     url.rsplit('/')

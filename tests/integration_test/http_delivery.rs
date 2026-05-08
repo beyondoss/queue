@@ -141,7 +141,7 @@ async fn test_http_delivery_dead_letter() {
     let client = TestClient::new();
     // Endpoint that always returns 500 — delivery will never succeed.
     let webhook = crate::helpers::TestWebhook::with_status_sequence(
-        std::iter::repeat(500u16).take(10).collect(),
+        std::iter::repeat_n(500u16, 10).collect(),
     )
     .await;
 
@@ -166,7 +166,7 @@ async fn test_http_delivery_dead_letter() {
 
     // The row should exist with attempt >= 1.
     let row = sqlx::query!(
-        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.http_deliveries
+        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.event_deliveries
            WHERE endpoint = $1 ORDER BY id DESC LIMIT 1"#,
         webhook.url,
     )
@@ -181,7 +181,7 @@ async fn test_http_delivery_dead_letter() {
 
     // Fast-forward: set attempt = max_attempts to simulate exhaustion.
     sqlx::query!(
-        "UPDATE queue.http_deliveries SET attempt = max_attempts WHERE id = $1",
+        "UPDATE queue.event_deliveries SET attempt = max_attempts WHERE id = $1",
         row.id,
     )
     .execute(&env.pool)
@@ -193,7 +193,7 @@ async fn test_http_delivery_dead_letter() {
 
     // Row must still exist — exhausted rows are retained for inspection, not deleted.
     let still_there = sqlx::query!(
-        r#"SELECT id AS "id!" FROM queue.http_deliveries WHERE id = $1"#,
+        r#"SELECT id AS "id!" FROM queue.event_deliveries WHERE id = $1"#,
         row.id,
     )
     .fetch_optional(&env.pool)
@@ -241,7 +241,7 @@ async fn test_http_delivery_endpoint_timeout() {
     tokio::time::sleep(std::time::Duration::from_secs(7)).await;
 
     let row = sqlx::query!(
-        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.http_deliveries
+        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.event_deliveries
            WHERE endpoint = $1 ORDER BY id DESC LIMIT 1"#,
         endpoint_url,
     )
@@ -262,7 +262,7 @@ async fn test_http_delivery_lease_reset_retries() {
     let client = TestClient::new();
     // Endpoint always fails so the row stays alive
     let webhook = crate::helpers::TestWebhook::with_status_sequence(
-        std::iter::repeat(500u16).take(10).collect(),
+        std::iter::repeat_n(500u16, 10).collect(),
     )
     .await;
 
@@ -291,7 +291,7 @@ async fn test_http_delivery_lease_reset_retries() {
     // Verify the attempt counter incremented. Uses the same query shape as
     // test_http_delivery_dead_letter.
     let row = sqlx::query!(
-        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.http_deliveries
+        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.event_deliveries
            WHERE endpoint = $1 ORDER BY id DESC LIMIT 1"#,
         webhook.url,
     )

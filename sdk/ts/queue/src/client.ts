@@ -126,7 +126,7 @@ export interface QueueClient {
   close(): Promise<void>;
 }
 
-function toQueueError(raw: unknown, status: number): QueueError {
+function toQueueError(raw: unknown, response: Response): QueueError {
   const inner = raw != null && typeof raw === "object" && "error" in raw
     ? (raw as { error: { code?: string; message?: string; hint?: string } })
       .error
@@ -136,7 +136,7 @@ function toQueueError(raw: unknown, status: number): QueueError {
   const code = inner?.code ?? "internal_error";
   const message = inner?.message ?? "Unknown error";
   const hint = inner?.hint;
-  return new QueueError(code, message, status, hint);
+  return new QueueError(code, message, response.status, response, hint);
 }
 
 function wrap<T>(
@@ -146,7 +146,7 @@ function wrap<T>(
     error !== undefined
       ? {
         data: undefined,
-        error: toQueueError(error, response.status),
+        error: toQueueError(error, response),
         response,
       }
       : { data: camelize(data) as Camelize<T>, error: undefined, response }
@@ -221,7 +221,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         if (error) {
           return {
             data: undefined,
-            error: toQueueError(error, response.status),
+            error: toQueueError(error, response),
             response,
           };
         }
@@ -249,7 +249,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         if (error && response.status !== 404) {
           return {
             data: undefined,
-            error: toQueueError(error, response.status),
+            error: toQueueError(error, response),
             response,
           };
         }
@@ -286,7 +286,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         if (error) {
           return {
             data: undefined,
-            error: toQueueError(error, response.status),
+            error: toQueueError(error, response),
             response,
           };
         }
@@ -312,7 +312,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         if (error) {
           return {
             data: undefined,
-            error: toQueueError(error, response.status),
+            error: toQueueError(error, response),
             response,
           };
         }
@@ -344,7 +344,7 @@ export function createQueueClient(opts: QueueClientOptions): QueueClient {
         if (error && response.status !== 404) {
           return {
             data: undefined,
-            error: toQueueError(error, response.status),
+            error: toQueueError(error, response),
             response,
           };
         }

@@ -14,7 +14,10 @@ use crate::AppState;
 use crate::parse_service_body;
 
 pub async fn handle_service_request(state: AppState, headers: HeaderMap, body: Bytes) -> Response {
-    let (is_json, action, parsed) = parse_service_body(&headers, &body, "AmazonSNS.");
+    let (is_json, action, parsed) = match parse_service_body(&headers, &body, "AmazonSNS.") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let protocol = if is_json {
         SnsProtocol::Json
     } else {

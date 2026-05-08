@@ -78,8 +78,8 @@ async fn deliver_batch(
 
         // Lease the rows by pushing next_attempt_at beyond the delivery window.
         // If this process crashes mid-delivery, rows re-surface after the lease expires.
-        let lease_until =
-            Utc::now() + chrono::Duration::seconds(config.delivery_timeout_secs as i64 + 30);
+        let timeout_secs = i64::try_from(config.delivery_timeout_secs).unwrap_or(3600);
+        let lease_until = Utc::now() + chrono::Duration::seconds(timeout_secs + 30);
         let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
         sqlx::query!(
             "UPDATE queue.event_deliveries SET next_attempt_at = $1 WHERE id = ANY($2)",

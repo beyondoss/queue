@@ -37,7 +37,7 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
 
     let (coalescer, _) = crate::ops::coalesce::start(pool.clone(), linger_ms);
     let base_url: Arc<str> = config.base_url().into();
-    let signer = Arc::new(Signer::generate());
+    let signer = Arc::new(Signer::generate()?);
     let state = AppState {
         pool,
         config: Arc::new(config),
@@ -83,17 +83,17 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
 
     // Start delivery worker with fast poll for tests; detach the handle since
     // tokio keeps the task alive until the runtime shuts down.
-    let _ = delivery::start(
+    drop(delivery::start(
         pool.clone(),
         delivery::DeliveryConfig {
             poll_interval_ms: 50,
             delivery_timeout_secs: 5,
             batch_size: 50,
         },
-    )?;
+    )?);
 
     let base_url: Arc<str> = config.base_url().into();
-    let signer = Arc::new(Signer::generate());
+    let signer = Arc::new(Signer::generate()?);
     let state = AppState {
         pool,
         config: Arc::new(config),
