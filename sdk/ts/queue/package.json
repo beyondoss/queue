@@ -2,6 +2,10 @@
   "name": "@beyond.dev/queue",
   "version": "0.1.0-dev",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/beyondoss/queue.git"
+  },
   "engines": {
     "node": ">=18"
   },
