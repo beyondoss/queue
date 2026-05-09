@@ -44,6 +44,7 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
         base_url,
         coalescer: Some(coalescer),
         signer,
+        metrics: Arc::new(crate::metrics::Metrics::new()),
     };
     let app = crate::build_router(state);
 
@@ -100,6 +101,7 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         base_url,
         coalescer: None,
         signer,
+        metrics: Arc::new(crate::metrics::Metrics::new()),
     };
     let app = crate::build_router(state);
 

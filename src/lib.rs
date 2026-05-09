@@ -2,29 +2,32 @@ pub mod cli;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod metrics;
 pub mod middleware;
 pub mod ops;
 pub mod routes;
 pub mod signing;
 pub mod sns;
 pub mod sqs;
+pub mod telemetry;
 pub mod test_support;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
-use axum::middleware::from_fn;
+use axum::extract::{MatchedPath, Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use sqlx::PgPool;
-use tracing_subscriber::EnvFilter;
 
 use config::Config;
 use error::ApiError;
+use metrics::Metrics;
 use ops::coalesce::Coalescer;
 use signing::Signer;
 
@@ -39,6 +42,7 @@ pub struct AppState {
     pub coalescer: Option<Coalescer>,
     /// RSA-2048 signer for SNS notification envelopes.
     pub signer: Arc<Signer>,
+    pub metrics: Arc<Metrics>,
 }
 
 /// Parse an AWS service request body: returns `Ok((is_json, action_name, parsed_body))`.
@@ -78,7 +82,13 @@ pub fn parse_service_body(
 }
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
-    init_tracing(&config);
+    let otel_config = telemetry::OtelConfig {
+        enabled: config.otlp_enabled,
+        otlp_endpoint: config.otlp_endpoint.clone(),
+        service_name: "beyond-queue".into(),
+        sample_rate: 1.0,
+    };
+    let _otel_guard = telemetry::init(&otel_config, vec![], &config.log_level)?;
 
     let pool = db::connect(&config.database_url, config.max_connections).await?;
 
@@ -113,6 +123,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         base_url,
         coalescer,
         signer,
+        metrics: Arc::new(Metrics::new()),
     };
 
     let app = build_router(state);
@@ -242,8 +253,45 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(api)
         .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics_handler))
         .route("/SimpleNotificationService.pem", get(serve_signing_cert))
+        .route_layer(from_fn_with_state(state.clone(), record_metrics))
         .with_state(state)
+}
+
+async fn record_metrics(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| req.uri().path().to_string());
+    let timer = state
+        .metrics
+        .http_request_duration_seconds
+        .with_label_values(&[method.as_str(), &path]);
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let status = response.status().as_u16().to_string();
+    state
+        .metrics
+        .http_requests_total
+        .with_label_values(&[method.as_str(), &path, &status])
+        .inc();
+    timer.observe(start.elapsed().as_secs_f64());
+
+    response
+}
+
+async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        state.metrics.encode(),
+    )
+        .into_response()
 }
 
 async fn serve_signing_cert(State(state): State<AppState>) -> impl IntoResponse {
@@ -272,9 +320,3 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-fn init_tracing(config: &Config) {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(&config.log_level))
-        .json()
-        .init();
-}
