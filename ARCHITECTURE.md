@@ -11,8 +11,9 @@ beyond-queue is an HTTP service that accepts SQS-compatible and native REST requ
 ```
 HTTP request
      │
-     ├── GET /livez ─────────────────────────────────► 200 OK  (no auth)
-     ├── GET /readyz ────────────────────────────────► 200 / 503  (no auth)
+     ├── GET /livez ─────────────────────────────────► 200 JSON {status,version}  (no auth)
+     ├── GET /readyz ────────────────────────────────► 200 / 503 JSON  (no auth)
+     ├── GET /metrics ───────────────────────────────► Prometheus text/plain  (no auth)
      │
      ▼
 require_auth middleware
@@ -25,12 +26,14 @@ Router
      │
      ├── POST /  ──► gateway_handler
      │                    │
-     │                    ├── X-Amz-Target: AmazonSNS.{Action} ──► sns::handle_service_request
+     │                    ├── X-Amz-Target: AmazonSNS.* header ─────► sns::handle_service_request
      │                    │        │
      │                    │        ├── application/x-amz-json-1.0  ──► SnsProtocol::Json
      │                    │        └── application/x-www-form-urlencoded ──► SnsProtocol::Query
      │                    │
-     │                    └── (anything else) ──► sqs::handle_service_request
+     │                    ├── form-urlencoded + SNS Action= in body ► sns::handle_service_request
+     │                    │
+     │                    └── (anything else) ──────────────────────► sqs::handle_service_request
      │                             │
      │                             ├── application/x-amz-json-1.0
      │                             │   X-Amz-Target: AmazonSQS.{Action} ──► SqsProtocol::Json
@@ -145,10 +148,13 @@ FIFO queues are identified by `.fifo` suffix in the queue name (SQS convention).
 
 ### SNS protocol dispatch
 
-`POST /` is shared between SQS and SNS. The `gateway_handler` in `src/lib.rs` checks the `X-Amz-Target` header prefix:
+`POST /` is shared between SQS and SNS. The `gateway_handler` in `src/lib.rs` uses a two-step check:
 
-- `AmazonSNS.{Action}` → `sns::handle_service_request`
-- anything else → `sqs::handle_service_request`
+1. If `X-Amz-Target` starts with `AmazonSNS.` → `sns::handle_service_request` (JSON protocol).
+2. Else if `Content-Type` is **not** `application/x-amz-json-1.0`, peek at the `Action` field in the form body. If it is a known SNS action → `sns::handle_service_request` (Query/form protocol).
+3. Anything else → `sqs::handle_service_request`.
+
+This two-step check is necessary because SNS Query-protocol requests carry no `X-Amz-Target` header — the action is embedded in the form body.
 
 SNS supports the same two wire formats as SQS (JSON and Query/form-encoded). Responses are SNS-shaped XML or JSON wrapped in `{Action}Response > {Action}Result` per the SNS spec.
 
@@ -179,12 +185,14 @@ The signature follows the SNS v2 spec: alphabetically sorted field name/value pa
 
 **ARN region and account** are hardcoded to `us-east-1` / `000000000000`, matching the SQS layer. Clients round-trip ARNs; the values are never authenticated.
 
-### Topic fanout
+### Event fanout
 
-`POST /v1/topics/{routing_key}` fans out to both SQS queues and HTTP endpoints:
+`POST /v1/events/{routing_key}` fans out to both SQS queues and HTTP endpoints:
 
 1. `queue.send_topic(routing_key, msg, headers, delay)` — fan-out to SQS subscriptions only. Validates the routing key, queries `queue.topic_subscriptions` where `routing_key ~ compiled_regex AND queue_name IS NOT NULL`, calls `queue.send` once per match.
 2. `queue.queue_http_deliveries(routing_key, raw_msg, envelope_msg)` — inserts one row into `queue.http_deliveries` per matching HTTP/HTTPS subscription. `raw_delivery=true` stores `raw_msg`; `false` stores `envelope_msg`.
+
+Both steps happen inside the same HTTP handler (`src/ops/event.rs`). The SQS fan-out is synchronous; HTTP deliveries are asynchronous (picked up by the delivery worker).
 
 The delivery worker (`src/ops/delivery.rs`) polls `http_deliveries` in a background task. Each poll opens a transaction, fetches pending rows with `FOR UPDATE SKIP LOCKED`, POSTs to each endpoint, and deletes on success or updates `attempt` / `next_attempt_at` on failure. Backoff schedule: 10s → 30s → 60s → 300s. Exhausted rows (`attempt >= max_attempts`) stay for inspection; no automatic reaping.
 
@@ -194,6 +202,22 @@ Bindings are stored in `queue.topic_subscriptions` with columns `protocol`, `end
 
 - `*` matches a single segment (no dots) → compiled to `[^.]+`
 - `#` matches zero or more segments → compiled to `.*`
+
+### Write coalescer
+
+When `LINGER_MS > 0`, non-FIFO sends are routed through a background coalescing task (`src/ops/coalesce.rs`) instead of writing to the database directly.
+
+Each send submits a `PendingMessage` to an `mpsc::channel` (capacity 16 384) and awaits a `oneshot` reply with the assigned `msg_id`. The background task:
+
+1. Blocks on `rx.recv()` until the first message arrives.
+2. Collects additional messages that arrive within `linger_ms` via `timeout_at`.
+3. Groups the batch by `(queue_name, delay)` — messages with different keys need separate DB calls.
+4. Flushes each group: if the group has 1 message → `send_message`; if > 1 → `send_batch`.
+5. Fans the resulting `msg_id`s back to the waiting callers via `oneshot`.
+
+`sync_commit=false` (async commit opt-out) is honoured only when **every** message in the group requests it; a single `sync_commit=true` member forces synchronous commit for the whole batch.
+
+Tradeoff: up to `LINGER_MS` added tail latency per message; messages in-flight in the channel are lost on crash (same risk as any in-flight HTTP request). Default `LINGER_MS=0` disables coalescing entirely.
 
 ### Queue name validation
 
@@ -238,45 +262,87 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 
 **Unauthenticated endpoints:**
 
-- `GET /livez` — liveness check; always returns 200. Use for Kubernetes `livenessProbe` to avoid restart loops during DB outages.
-- `GET /readyz` — readiness check; queries the DB (`SELECT 1`). Returns 200 when healthy, 503 when the DB is unreachable. Use for Kubernetes `readinessProbe`.
+- `GET /livez` — liveness check; returns `{"status":"ok","version":"..."}`. Use for Kubernetes `livenessProbe` to avoid restart loops during DB outages.
+- `GET /readyz` — readiness check; queries the DB (`SELECT 1`). Returns `{"status":"ok"}` when healthy, `{"status":"degraded"}` + 503 when the DB is unreachable. Use for Kubernetes `readinessProbe`.
+- `GET /metrics` — Prometheus text exposition (`text/plain; version=0.0.4`). Scrape with any Prometheus-compatible collector. No auth — restrict via network policy if needed.
 
 ---
 
 ## Configuration
 
-| Variable                     | Default                 | What It Controls                                                                                                  |
-| ---------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`               | (required)              | PostgreSQL connection string passed to sqlx `PgPoolOptions`.                                                      |
-| `ADDRESS`                    | `0.0.0.0:9324`          | TCP bind address for the HTTP server.                                                                             |
-| `DEFAULT_VISIBILITY_TIMEOUT` | `30`                    | Seconds applied when a `ReceiveMessage` request omits `VisibilityTimeout`.                                        |
-| `MAX_CONNECTIONS`            | `10`                    | Hard cap on the sqlx connection pool. Excess operations wait for a free slot.                                     |
-| `LOG_LEVEL`                  | `info`                  | `EnvFilter` directive (e.g. `beyond_queue=debug,info`). JSON-structured output.                                   |
-| `OTLP_ENABLED`               | `false`                 | Enable OpenTelemetry OTLP trace export over gRPC.                                                                 |
-| `OTLP_ENDPOINT`              | `http://localhost:4317` | gRPC OTLP collector. Used when `OTLP_ENABLED=true`.                                                               |
-| `BASE_URL`                   | `http://{ADDRESS}`      | Base URL for SQS queue URLs returned to clients (`{BASE_URL}/000000000000/{name}`). Override when behind a proxy. |
-| `HTTP_DELIVERY_ENABLED`      | `true`                  | Enable the background HTTP/HTTPS delivery worker.                                                                 |
-| `HTTP_DELIVERY_POLL_MS`      | `1000`                  | Delivery worker poll interval (ms). Lower values increase responsiveness at the cost of idle DB load.             |
-| `HTTP_DELIVERY_TIMEOUT_SECS` | `5`                     | Per-request timeout for outbound webhook POSTs.                                                                   |
-| `HTTP_DELIVERY_BATCH_SIZE`   | `50`                    | Maximum rows the delivery worker claims per poll cycle. Tune up under high SNS fanout load.                       |
+| Variable                     | Default                 | What It Controls                                                                                                                 |
+| ---------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`               | (required)              | PostgreSQL connection string passed to sqlx `PgPoolOptions`.                                                                     |
+| `ADDRESS`                    | `0.0.0.0:9324`          | TCP bind address for the HTTP server.                                                                                            |
+| `DEFAULT_VISIBILITY_TIMEOUT` | `30`                    | Seconds applied when a `ReceiveMessage` request omits `VisibilityTimeout`.                                                       |
+| `MAX_CONNECTIONS`            | `10`                    | Hard cap on the sqlx connection pool. Excess operations wait for a free slot.                                                    |
+| `LOG_LEVEL`                  | `info`                  | `EnvFilter` directive (e.g. `beyond_queue=debug,info`). JSON-structured output.                                                  |
+| `OTLP_ENABLED`               | `false`                 | Enable OpenTelemetry OTLP trace export over gRPC.                                                                                |
+| `OTLP_ENDPOINT`              | `http://localhost:4317` | gRPC OTLP collector. Used when `OTLP_ENABLED=true`.                                                                              |
+| `OTLP_SAMPLE_RATE`           | `0.1`                   | Fraction of traces sampled (0.0 = never, 1.0 = always). Only effective when `OTLP_ENABLED=true`.                                 |
+| `LINGER_MS`                  | `0`                     | Write coalescer window (ms). Non-FIFO sends are held up to this duration and flushed as a single batch. `0` disables coalescing. |
+| `BASE_URL`                   | `http://{ADDRESS}`      | Base URL for SQS queue URLs returned to clients (`{BASE_URL}/000000000000/{name}`). Override when behind a proxy.                |
+| `HTTP_DELIVERY_ENABLED`      | `true`                  | Enable the background HTTP/HTTPS delivery worker.                                                                                |
+| `HTTP_DELIVERY_POLL_MS`      | `1000`                  | Delivery worker poll interval (ms). Lower values increase responsiveness at the cost of idle DB load.                            |
+| `HTTP_DELIVERY_TIMEOUT_SECS` | `5`                     | Per-request timeout for outbound webhook POSTs.                                                                                  |
+| `HTTP_DELIVERY_BATCH_SIZE`   | `50`                    | Maximum rows the delivery worker claims per poll cycle. Tune up under high SNS fanout load.                                      |
+
+---
+
+## Observability
+
+### Prometheus metrics (`GET /metrics`)
+
+The service exposes Prometheus-format metrics. Every request updates the HTTP counters; queue ops update per-queue counters inside the `ops/` layer; the delivery worker updates delivery counters; a background task (`start_queue_depth_scrape`, 15 s interval) sets the queue-depth gauges.
+
+| Metric                                    | Type      | Labels                           | What It Measures                                                       |
+| ----------------------------------------- | --------- | -------------------------------- | ---------------------------------------------------------------------- |
+| `http_requests_total`                     | counter   | `method`, `path`, `status`       | Requests completed                                                     |
+| `http_request_duration_seconds`           | histogram | `method`, `path`                 | Request latency (buckets: 5ms–2.5s)                                    |
+| `http_connections_active`                 | gauge     | —                                | Requests in flight                                                     |
+| `queue_messages_sent_total`               | counter   | `queue`                          | Messages enqueued                                                      |
+| `queue_messages_received_total`           | counter   | `queue`                          | Messages delivered to consumers                                        |
+| `queue_messages_deleted_total`            | counter   | `queue`                          | Messages acknowledged (deleted)                                        |
+| `queue_messages_redelivered_total`        | counter   | `queue`                          | Messages delivered with `read_count > 1` (missed ack before vt expiry) |
+| `queue_message_send_duration_seconds`     | histogram | `queue`                          | DB send latency (1ms–1s)                                               |
+| `queue_message_receive_duration_seconds`  | histogram | `queue`                          | DB receive latency (1ms–1s)                                            |
+| `queue_message_delete_duration_seconds`   | histogram | `queue`                          | DB delete latency (1ms–1s)                                             |
+| `queue_message_age_at_receive_seconds`    | histogram | `queue`                          | Age of message at first delivery (0.1s–1h)                             |
+| `queue_delivery_attempts_total`           | counter   | `outcome` (`success`\|`failure`) | HTTP webhook delivery attempts                                         |
+| `queue_delivery_attempt_duration_seconds` | histogram | `outcome`                        | Webhook round-trip latency (50ms–10s)                                  |
+| `queue_delivery_exhausted_total`          | counter   | —                                | Deliveries permanently abandoned after max retries                     |
+| `queue_coalescer_flush_batch_size`        | histogram | —                                | Messages per coalescer flush (1–1000)                                  |
+| `queue_depth`                             | gauge     | `queue`                          | Current visible messages (scrape lag ≤ 15s)                            |
+| `queue_in_flight`                         | gauge     | `queue`                          | Current locked/delayed messages (scrape lag ≤ 15s)                     |
+| `db_pool_size`                            | gauge     | —                                | Total DB connections (idle + active)                                   |
+| `db_pool_idle`                            | gauge     | —                                | Idle DB connections                                                    |
+| `db_pool_active`                          | gauge     | —                                | Active (checked-out) DB connections                                    |
+| `db_pool_acquire_timeouts_total`          | counter   | —                                | Pool exhaustion errors                                                 |
+
+### Distributed tracing (OTLP)
+
+When `OTLP_ENABLED=true`, spans are exported to the configured gRPC collector. Incoming W3C `traceparent`/`tracestate` headers are propagated so spans become children of the caller's trace (`OtelMakeSpan` in `src/lib.rs`). `OTLP_SAMPLE_RATE` controls head-based sampling (default 10%).
 
 ---
 
 ## Failure Modes
 
-| Failure                                     | What Actually Happens                                                                                         | Recovery                                                                                                              |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Consumer crashes before deleting message    | Message stays in `queue.q_{name}` with vt in the future. When vt expires, next read returns it again.         | None needed — automatic re-delivery. `read_ct` increments on each delivery.                                           |
-| PostgreSQL connection pool exhausted        | sqlx returns `PoolTimedOut`; handler returns 500 with `{"error": "Database error"}`.                          | Client retries. Pool clears as in-flight connections finish.                                                          |
-| PostgreSQL unavailable at startup           | `db::connect` fails; process exits non-zero.                                                                  | Restart the process once PostgreSQL is available.                                                                     |
-| PostgreSQL unavailable mid-flight           | sqlx returns an error; handler returns 500.                                                                   | Client retries. Pool reconnects on next use.                                                                          |
-| Extension not in `shared_preload_libraries` | `WaiterRegistry` not initialized; `receive` falls back to `WL_TIMEOUT` polling at `poll_interval_ms`.         | Functional but higher read latency. Fix by adding the extension to `shared_preload_libraries`.                        |
-| Postmaster death during `WaitLatch`         | `WL_EXIT_ON_PM_DEATH` triggers; backend exits.                                                                | PostgreSQL restarts the backend on next connection.                                                                   |
-| Queue name injection attempt                | `validate_name` in pgrx raises PostgreSQL ERROR (`pgrx::error!()`).                                           | Caught by the `match $handler(…).await` macro arm; returned as 400/InternalError to client.                           |
-| Mismatched headers array in `send_batch`    | pgrx raises PostgreSQL ERROR comparing array lengths before insert.                                           | Client receives 500. No partial insert.                                                                               |
-| HTTP endpoint returns non-2xx               | Delivery worker increments `attempt`, sets `next_attempt_at = now + backoff`. Row stays in `http_deliveries`. | Worker retries after backoff (10s/30s/60s/300s). After `max_attempts` (5), row stays as dead-letter for inspection.   |
-| HTTP endpoint unreachable / timeout         | Same as non-2xx: recorded as failure, retried with backoff.                                                   | Same retry path. `last_error` column stores the error string.                                                         |
-| Delivery worker restart mid-batch           | Transaction rolls back; rows revert to pending state (next_attempt_at unchanged).                             | Worker picks them up again on next poll. `FOR UPDATE SKIP LOCKED` prevents double-delivery across concurrent workers. |
+| Failure                                          | What Actually Happens                                                                                                                                                                               | Recovery                                                                                                                   |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Consumer crashes before deleting message         | Message stays in `queue.q_{name}` with vt in the future. When vt expires, next read returns it again.                                                                                               | None needed — automatic re-delivery. `read_ct` increments on each delivery.                                                |
+| PostgreSQL connection pool exhausted             | sqlx returns `PoolTimedOut`; handler returns 500 with `{"error": "Database error"}`.                                                                                                                | Client retries. Pool clears as in-flight connections finish.                                                               |
+| PostgreSQL unavailable at startup                | `db::connect` fails; process exits non-zero.                                                                                                                                                        | Restart the process once PostgreSQL is available.                                                                          |
+| PostgreSQL unavailable mid-flight                | sqlx returns an error; handler returns 500.                                                                                                                                                         | Client retries. Pool reconnects on next use.                                                                               |
+| Extension not in `shared_preload_libraries`      | `WaiterRegistry` not initialized; `receive` falls back to `WL_TIMEOUT` polling at `poll_interval_ms`.                                                                                               | Functional but higher read latency. Fix by adding the extension to `shared_preload_libraries`.                             |
+| Postmaster death during `WaitLatch`              | `WL_EXIT_ON_PM_DEATH` triggers; backend exits.                                                                                                                                                      | PostgreSQL restarts the backend on next connection.                                                                        |
+| Queue name injection attempt                     | `validate_name` in pgrx raises PostgreSQL ERROR (`pgrx::error!()`).                                                                                                                                 | Caught by the `match $handler(…).await` macro arm; returned as 400/InternalError to client.                                |
+| Mismatched headers array in `send_batch`         | pgrx raises PostgreSQL ERROR comparing array lengths before insert.                                                                                                                                 | Client receives 500. No partial insert.                                                                                    |
+| HTTP endpoint returns non-2xx                    | Delivery worker increments `attempt`, sets `next_attempt_at = now + backoff`. Row stays in `http_deliveries`.                                                                                       | Worker retries after backoff (10s/30s/60s/300s). After `max_attempts` (5), row stays as dead-letter for inspection.        |
+| HTTP endpoint unreachable / timeout              | Same as non-2xx: recorded as failure, retried with backoff.                                                                                                                                         | Same retry path. `last_error` column stores the error string.                                                              |
+| Delivery worker restart mid-batch                | Transaction rolls back; rows revert to pending state (next_attempt_at unchanged).                                                                                                                   | Worker picks them up again on next poll. `FOR UPDATE SKIP LOCKED` prevents double-delivery across concurrent workers.      |
+| Process killed while coalescer has pending sends | Messages in the `mpsc` channel are lost (not yet written to DB).                                                                                                                                    | Same as losing any in-flight HTTP request — client must retry. `LINGER_MS=0` eliminates this risk at the cost of batching. |
+| SIGTERM received                                 | `shutdown_signal()` resolves; axum stops accepting new connections and drains in-flight requests. Coalescer drains with a 10s deadline; delivery worker aborts (abort-safe via lease-based design). | Graceful — no messages lost for in-flight DB ops.                                                                          |
+| HTTP request exceeds 30s                         | `TimeoutLayer` returns 408 Request Timeout. DB query may still complete; client should retry with idempotency.                                                                                      | Client retries.                                                                                                            |
 
 ---
 
@@ -285,21 +351,25 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | Path                                    | What It Does                                                                                                                                                                                                                                                         |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.rs`                           | Binary entry point; delegates to `beyond_queue::run()`. Sets jemalloc as allocator.                                                                                                                                                                                  |
-| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SNS/SQS gateway at `POST /` + SQS path handler + `/livez` + `/readyz`. Attaches `require_auth` to all except liveness/readiness probes.                                                                                       |
+| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SNS/SQS gateway at `POST /` + SQS path handler + `/livez` + `/readyz` + `/metrics`. Attaches `require_auth` to all authenticated routes. `record_metrics` middleware runs on every request.                                   |
 | `src/config.rs`                         | `Config` struct parsed from CLI args / env vars via clap.                                                                                                                                                                                                            |
 | `src/db.rs`                             | Creates `PgPool` with `max_connections`.                                                                                                                                                                                                                             |
+| `src/error.rs`                          | `ApiError` enum (QueueNotFound, BadRequest, Internal, DbPoolTimeout). Implements `IntoResponse` for axum.                                                                                                                                                            |
+| `src/metrics.rs`                        | `Metrics` struct — Prometheus `Registry` with counters, histograms, and gauges for HTTP, queue ops, delivery, coalescer, and DB pool. Exposed at `GET /metrics`.                                                                                                     |
+| `src/telemetry.rs`                      | OpenTelemetry/OTLP setup. `init()` configures the tracing subscriber with optional OTLP export and W3C trace context propagation.                                                                                                                                    |
 | `src/middleware/auth.rs`                | Checks for presence of `Authorization` header; rejects with 403 if absent.                                                                                                                                                                                           |
 | `src/ops/send.rs`                       | `queue.send`, `queue.send_batch`, `queue.send_fifo` — single/batch/FIFO inserts.                                                                                                                                                                                     |
 | `src/ops/receive.rs`                    | `queue.receive`, `queue.receive_fifo` — long-poll reads.                                                                                                                                                                                                             |
 | `src/ops/delete.rs`                     | `queue.delete` — single and batch deletes.                                                                                                                                                                                                                           |
 | `src/ops/visibility.rs`                 | `queue.change_visibility` — change visibility timeout by msg_id.                                                                                                                                                                                                     |
-| `src/ops/queue_admin.rs`                | `queue.create`, `queue.create_fifo`, `queue.delete_queue`, `queue.list_queues`, `queue.metrics`, `queue.purge_queue`.                                                                                                                                                |
-| `src/ops/topic.rs`                      | `queue.send_topic` fan-out; `queue.queue_http_deliveries`; subscribe/unsubscribe/list ops; SNS-specific list/delete helpers.                                                                                                                                         |
+| `src/ops/queue_admin.rs`                | `queue.create`, `queue.create_fifo`, `queue.delete_queue`, `queue.list_queues`, `queue.metrics`, `queue.purge_queue`. `all_queue_depths()` is called by the depth-scrape background task.                                                                            |
+| `src/ops/event.rs`                      | `queue.send_topic` fan-out; `queue.queue_http_deliveries`; subscribe/unsubscribe/list ops; SNS-specific list/delete helpers.                                                                                                                                         |
+| `src/ops/coalesce.rs`                   | Write coalescer. `Coalescer` is a cloneable handle to an `mpsc::channel`; the background task groups pending sends by `(queue_name, delay)` and flushes them as `send_batch` calls within the `LINGER_MS` window.                                                    |
 | `src/ops/delivery.rs`                   | Background HTTP delivery worker. Polls `queue.http_deliveries`, POSTs to endpoints, retries with exponential backoff.                                                                                                                                                |
 | `src/signing.rs`                        | RSA-2048 keypair generated at startup. `sign_notification()` produces SNS v2 base64 signatures. Self-signed X.509 cert served at `/SimpleNotificationService.pem`.                                                                                                   |
-| `src/routes/queues.rs`                  | `GET/POST /v1/queues`, `GET/DELETE /v1/queues/{name}`, `POST /v1/queues/{name}/purge`.                                                                                                                                                                               |
+| `src/routes/queues.rs`                  | `GET/POST /v1/queues`, `GET/DELETE /v1/queues/{name}`, `POST /v1/queues/{name}/purge`, `GET /v1/queues/{name}/subscriptions`.                                                                                                                                        |
 | `src/routes/messages.rs`                | `GET/POST/DELETE /v1/queues/{name}/messages`, `DELETE/PATCH /v1/queues/{name}/messages/{id}`.                                                                                                                                                                        |
-| `src/routes/topics.rs`                  | `POST /v1/topics/{routing_key}`, subscription CRUD endpoints.                                                                                                                                                                                                        |
+| `src/routes/events.rs`                  | `POST /v1/events/{routing_key}`, subscription CRUD at `/v1/events/{pattern}/subscriptions`.                                                                                                                                                                          |
 | `src/sns/mod.rs`                        | SNS service handler. Protocol detection (JSON/Query), action dispatch.                                                                                                                                                                                               |
 | `src/sns/context.rs`                    | `SnsContext` — per-request protocol + request ID + action. ARN helpers. Serializes responses as SNS-shaped JSON or XML.                                                                                                                                              |
 | `src/sns/types.rs`                      | Request/response structs for all SNS actions.                                                                                                                                                                                                                        |
@@ -335,11 +405,15 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | `DELETE` | `/v1/queues/{name}/messages`              | Batch delete. Body: `{"ids": [1,2,3]}`. Returns `{"deleted": [1,2,3]}`.                                                               |
 | `DELETE` | `/v1/queues/{name}/messages/{id}`         | Delete single. Returns 204 or 404.                                                                                                    |
 | `PATCH`  | `/v1/queues/{name}/messages/{id}`         | Change visibility. Body: `{"vt": 60}`. Returns `{"id": N, "visible_at": "..."}`.                                                      |
-| `POST`   | `/v1/topics/{routing_key}`                | Fan-out to SQS queues + HTTP endpoints. Body: `{message, headers?, delay?}`. Returns 201 `{"queues_matched": N, "messages": [...]}`.  |
-| `POST`   | `/v1/topics/{pattern}/subscriptions`      | Subscribe SQS queue (`{"queue_name":"..."}`) or HTTP endpoint (`{"protocol":"http","endpoint":"...","envelope":false}`). Returns 201. |
-| `GET`    | `/v1/topics/{pattern}/subscriptions`      | List subscriptions for a pattern.                                                                                                     |
-| `DELETE` | `/v1/topics/{pattern}/subscriptions/{id}` | Unsubscribe by id. Returns 204 or 404.                                                                                                |
+| `POST`   | `/v1/events/{routing_key}`                | Fan-out to SQS queues + HTTP endpoints. Body: `{message, headers?, delay?}`. Returns 201 `{"queues_matched": N, "messages": [...]}`.  |
+| `POST`   | `/v1/events/{pattern}/subscriptions`      | Subscribe SQS queue (`{"queue_name":"..."}`) or HTTP endpoint (`{"protocol":"http","endpoint":"...","envelope":false}`). Returns 201. |
+| `GET`    | `/v1/events/{pattern}/subscriptions`      | List subscriptions for a routing-key pattern.                                                                                         |
+| `DELETE` | `/v1/events/{pattern}/subscriptions/{id}` | Unsubscribe by id. Returns 204 or 404.                                                                                                |
+| `GET`    | `/v1/queues/{name}/subscriptions`         | List all event subscriptions targeting this queue.                                                                                    |
+| `GET`    | `/v1/openapi.json`                        | Dynamically generated OpenAPI 3.1 spec for the native REST API.                                                                       |
+| `GET`    | `/v1/cert`                                | PEM-encoded public certificate for SNS signature verification (same cert as `/SimpleNotificationService.pem`).                        |
 | `GET`    | `/SimpleNotificationService.pem`          | PEM-encoded public certificate for SNS signature verification.                                                                        |
+| `GET`    | `/metrics`                                | Prometheus text metrics (unauthenticated). See Observability section.                                                                 |
 
 ### SQS-compatible API
 
