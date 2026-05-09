@@ -93,9 +93,9 @@ unsafe fn direct_heap_insert(
     use pgrx::pg_sys::*;
     use std::ffi::CString;
 
-    let queue_ns = get_namespace_oid(c"queue".as_ptr(), false);
+    let queue_ns = unsafe { get_namespace_oid(c"queue".as_ptr(), false) };
     let tbl_name = CString::new(format!("q_{queue_name}")).unwrap();
-    let relid = get_relname_relid(tbl_name.as_ptr(), queue_ns);
+    let relid = unsafe { get_relname_relid(tbl_name.as_ptr(), queue_ns) };
     if relid == InvalidOid {
         pgrx::error!("queue table queue.q_{queue_name} does not exist");
     }
@@ -106,17 +106,17 @@ unsafe fn direct_heap_insert(
     }
 
     // RowExclusiveLock matches what a regular INSERT acquires.
-    let rel = table_open(relid, ROW_EXCLUSIVE_LOCK);
-    let tupdesc = (*rel).rd_att;
+    let rel = unsafe { table_open(relid, ROW_EXCLUSIVE_LOCK) };
+    let tupdesc = unsafe { (*rel).rd_att };
 
     // Advance the identity sequence for msg_id (attnum 1, 1-based).
     // check_permissions=false: caller already holds INSERT on the table which implies USAGE.
-    let seq_oid = getIdentitySequence(rel, 1, false);
-    let msg_id = nextval_internal(seq_oid, false);
+    let seq_oid = unsafe { getIdentitySequence(rel, 1, false) };
+    let msg_id = unsafe { nextval_internal(seq_oid, false) };
 
     // Build values array for the 7 columns:
     //   msg_id(1) read_ct(2) enqueued_at(3) last_read_at(4) vt(5) message(6) headers(7)
-    let now = GetCurrentTimestamp();
+    let now = unsafe { GetCurrentTimestamp() };
     let vt_datum = delay
         .into_datum()
         .unwrap_or_else(|| Datum::from(now as usize));
@@ -138,22 +138,22 @@ unsafe fn direct_heap_insert(
     }
 
     // Form tuple and insert into heap. heap_insert handles TOAST and WAL.
-    let tuple = heap_form_tuple(tupdesc, values.as_mut_ptr(), nulls.as_mut_ptr());
-    let cid = GetCurrentCommandId(true);
+    let tuple = unsafe { heap_form_tuple(tupdesc, values.as_mut_ptr(), nulls.as_mut_ptr()) };
+    let cid = unsafe { GetCurrentCommandId(true) };
     // options=0: normal insert (no HEAP_INSERT_SKIP_FSM, no HEAP_INSERT_FROZEN)
-    heap_insert(rel, tuple, cid, 0, std::ptr::null_mut());
+    unsafe { heap_insert(rel, tuple, cid, 0, std::ptr::null_mut()) };
     // After heap_insert, tuple->t_self holds the on-disk TID needed for index_insert.
 
     // Maintain each index on this relation.
-    let index_list = RelationGetIndexList(rel);
-    let n = (*index_list).length as usize;
+    let index_list = unsafe { RelationGetIndexList(rel) };
+    let n = unsafe { (*index_list).length } as usize;
     for i in 0..n {
         // PG13+ List stores elements in a flat array, not a linked list.
-        let idx_oid = (*(*index_list).elements.add(i)).oid_value;
-        let idx_rel = index_open(idx_oid, ROW_EXCLUSIVE_LOCK);
-        let idx_info = BuildIndexInfo(idx_rel);
+        let idx_oid = unsafe { (*(*index_list).elements.add(i)).oid_value };
+        let idx_rel = unsafe { index_open(idx_oid, ROW_EXCLUSIVE_LOCK) };
+        let idx_info = unsafe { BuildIndexInfo(idx_rel) };
 
-        let ncols = (*idx_info).ii_NumIndexAttrs as usize;
+        let ncols = unsafe { (*idx_info).ii_NumIndexAttrs } as usize;
         let mut idx_vals: Vec<Datum> = vec![Datum::from(0usize); ncols];
         let mut idx_nulls: Vec<bool> = vec![false; ncols];
 
@@ -161,7 +161,7 @@ unsafe fn direct_heap_insert(
         // ii_IndexAttrNumbers is 1-based; 0 marks an expression column which we
         // cannot handle here — fail loudly rather than silently producing a corrupt index.
         for j in 0..ncols {
-            let attnum = (*idx_info).ii_IndexAttrNumbers[j]; // i16, 1-based
+            let attnum = unsafe { (*idx_info).ii_IndexAttrNumbers[j] }; // i16, 1-based
             if attnum == 0 {
                 pgrx::error!(
                     "expression index on queue table is not supported with direct_heap_insert; \
@@ -174,29 +174,31 @@ unsafe fn direct_heap_insert(
             }
         }
 
-        let unique_check = if (*idx_info).ii_Unique {
+        let unique_check = if unsafe { (*idx_info).ii_Unique } {
             IndexUniqueCheck::UNIQUE_CHECK_YES
         } else {
             IndexUniqueCheck::UNIQUE_CHECK_NO
         };
 
-        index_insert(
-            idx_rel,
-            idx_vals.as_mut_ptr(),
-            idx_nulls.as_mut_ptr(),
-            &mut (*tuple).t_self,
-            rel,
-            unique_check,
-            false, // indexUnchanged
-            idx_info,
-        );
+        unsafe {
+            index_insert(
+                idx_rel,
+                idx_vals.as_mut_ptr(),
+                idx_nulls.as_mut_ptr(),
+                &mut (*tuple).t_self,
+                rel,
+                unique_check,
+                false, // indexUnchanged
+                idx_info,
+            );
+        }
 
         // NoLock: we keep the parent relation's RowExclusiveLock through commit.
-        index_close(idx_rel, NO_LOCK);
+        unsafe { index_close(idx_rel, NO_LOCK) };
     }
 
     // Close descriptor but keep the RowExclusiveLock held until transaction commit.
-    table_close(rel, NO_LOCK);
+    unsafe { table_close(rel, NO_LOCK) };
 
     msg_id
 }
@@ -304,7 +306,7 @@ fn send_batch_internal(
     // Wake WaitLatch-based readers when this transaction commits.
     unsafe { crate::waiter::register_notify_after_commit(queue_name) };
 
-    SetOfIterator::new(ids.into_iter())
+    SetOfIterator::new(ids)
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +336,7 @@ fn send_batch_internal(
 //         the deadline elapses, or when the postmaster dies.
 //      f. ProcessInterrupts() — honour Ctrl+C / statement_timeout.
 #[pg_extern(name = "receive", schema = "queue", volatile)]
+#[allow(clippy::type_complexity)] // pgrx proc-macro parses return type syntactically; aliases unsupported
 fn receive_fn(
     queue_name: &str,
     vt: i32,
@@ -448,7 +451,7 @@ fn receive_fn(
     };
 
     // _waiter drops here, unregistering from the waiter registry.
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +505,7 @@ fn send_fifo_full(
 
     unsafe { crate::waiter::register_notify_after_commit(queue_name) };
 
-    SetOfIterator::new(ids.into_iter())
+    SetOfIterator::new(ids)
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +518,7 @@ fn send_fifo_full(
 // qty and vt are embedded as format-string literals for the same reason as
 // receive: generic plans with LIMIT $N degrade SKIP LOCKED throughput.
 #[pg_extern(name = "receive_fifo", schema = "queue", volatile)]
+#[allow(clippy::type_complexity)] // pgrx proc-macro parses return type syntactically; aliases unsupported
 fn receive_fifo_fn(
     queue_name: &str,
     vt: i32,
@@ -603,7 +607,7 @@ fn receive_fifo_fn(
         }
     };
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -648,7 +652,7 @@ fn delete_batch(queue_name: &str, msg_ids: pgrx::Array<i64>) -> SetOfIterator<'s
     })
     .unwrap_or_else(|e| pgrx::error!("queue.delete: {e}"));
 
-    SetOfIterator::new(deleted.into_iter())
+    SetOfIterator::new(deleted)
 }
 
 // ---------------------------------------------------------------------------
@@ -711,7 +715,7 @@ fn archive_batch(queue_name: &str, msg_ids: pgrx::Array<i64>) -> SetOfIterator<'
     })
     .unwrap_or_else(|e| pgrx::error!("queue.archive: {e}"));
 
-    SetOfIterator::new(archived.into_iter())
+    SetOfIterator::new(archived)
 }
 
 // ---------------------------------------------------------------------------
@@ -719,6 +723,7 @@ fn archive_batch(queue_name: &str, msg_ids: pgrx::Array<i64>) -> SetOfIterator<'
 // ---------------------------------------------------------------------------
 
 #[pg_extern(name = "pop", schema = "queue", volatile, parallel_safe)]
+#[allow(clippy::type_complexity)] // pgrx proc-macro parses return type syntactically; aliases unsupported
 fn pop(
     queue_name: &str,
     qty: default!(i32, 1),
@@ -752,7 +757,7 @@ fn pop(
     let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[]))
         .unwrap_or_else(|e| pgrx::error!("queue.pop: {e}"));
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -760,6 +765,7 @@ fn pop(
 // ---------------------------------------------------------------------------
 
 #[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+#[allow(clippy::type_complexity)] // pgrx proc-macro parses return type syntactically; aliases unsupported
 fn change_visibility_ts(
     queue_name: &str,
     msg_id: i64,
@@ -788,10 +794,11 @@ fn change_visibility_ts(
         Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()]))
             .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 #[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+#[allow(clippy::type_complexity)] // pgrx proc-macro parses return type syntactically; aliases unsupported
 fn change_visibility_secs(
     queue_name: &str,
     msg_id: i64,
@@ -822,10 +829,11 @@ fn change_visibility_secs(
         Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), msg_id.into()]))
             .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 #[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+#[allow(clippy::type_complexity)] // pgrx proc-macro parses return type syntactically; aliases unsupported
 fn change_visibility_batch_ts(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
@@ -854,7 +862,7 @@ fn change_visibility_batch_ts(
     let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), ids.into()]))
         .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -976,7 +984,7 @@ fn publish_event_pgrx(
         unsafe { crate::waiter::register_notify_after_commit(name) };
     }
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,10 +1078,11 @@ fn publish_event_batch_pgrx(
         unsafe { crate::waiter::register_notify_after_commit(name) };
     }
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }
 
 #[pg_extern(name = "change_visibility", schema = "queue", volatile, parallel_safe)]
+#[allow(clippy::type_complexity)] // pgrx proc-macro parses return type syntactically; aliases unsupported
 fn change_visibility_batch_secs(
     queue_name: &str,
     msg_ids: pgrx::Array<i64>,
@@ -1104,5 +1113,5 @@ fn change_visibility_batch_secs(
     let rows = Spi::connect_mut(|client| collect_msg_rows(client, &sql, &[vt.into(), ids.into()]))
         .unwrap_or_else(|e| pgrx::error!("queue.change_visibility: {e}"));
 
-    TableIterator::new(rows.into_iter())
+    TableIterator::new(rows)
 }

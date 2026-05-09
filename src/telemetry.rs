@@ -142,27 +142,26 @@ pub fn get_current_traceparent() -> Option<String> {
     })
 }
 
-/// Extract an OTel context from an incoming W3C traceparent header value.
-#[allow(dead_code)]
-pub fn extract_trace_context(traceparent: Option<&str>) -> opentelemetry::Context {
+/// Extract an OTel context from incoming W3C `traceparent`/`tracestate` headers.
+pub fn extract_trace_context(headers: &axum::http::HeaderMap) -> opentelemetry::Context {
     use opentelemetry::propagation::TextMapPropagator as _;
     use opentelemetry_sdk::propagation::TraceContextPropagator;
 
-    struct Carrier<'a>(Option<&'a str>);
+    struct Carrier<'a>(&'a axum::http::HeaderMap);
 
     impl opentelemetry::propagation::Extractor for Carrier<'_> {
         fn get(&self, key: &str) -> Option<&str> {
-            key.eq_ignore_ascii_case("traceparent").then_some(self.0)?
+            self.0.get(key).and_then(|v| v.to_str().ok())
         }
         fn keys(&self) -> Vec<&str> {
-            if self.0.is_some() { vec!["traceparent"] } else { vec![] }
+            self.0.keys().map(|k| k.as_str()).collect()
         }
     }
 
     static PROPAGATOR: std::sync::LazyLock<TraceContextPropagator> =
         std::sync::LazyLock::new(TraceContextPropagator::new);
 
-    PROPAGATOR.extract(&Carrier(traceparent))
+    PROPAGATOR.extract(&Carrier(headers))
 }
 
 fn env_filter(default_filter: &str) -> EnvFilter {

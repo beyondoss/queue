@@ -1,9 +1,13 @@
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use reqwest::Client;
 use sqlx::PgPool;
 use tokio::task::JoinHandle;
+use tracing::Instrument as _;
+
+use crate::metrics::Metrics;
 
 pub struct DeliveryConfig {
     pub poll_interval_ms: u64,
@@ -21,16 +25,20 @@ impl Default for DeliveryConfig {
     }
 }
 
-pub fn start(pool: PgPool, config: DeliveryConfig) -> anyhow::Result<JoinHandle<()>> {
+pub fn start(
+    pool: PgPool,
+    config: DeliveryConfig,
+    metrics: Arc<Metrics>,
+) -> anyhow::Result<JoinHandle<()>> {
     let client = Client::builder()
         .timeout(Duration::from_secs(config.delivery_timeout_secs))
         .build()?;
-    Ok(tokio::spawn(run(pool, client, config)))
+    Ok(tokio::spawn(run(pool, client, config, metrics)))
 }
 
-async fn run(pool: PgPool, client: Client, config: DeliveryConfig) {
+async fn run(pool: PgPool, client: Client, config: DeliveryConfig, metrics: Arc<Metrics>) {
     loop {
-        match deliver_batch(&pool, &client, &config).await {
+        match deliver_batch(&pool, &client, &config, &metrics).await {
             Ok(0) => {
                 tokio::time::sleep(Duration::from_millis(config.poll_interval_ms)).await;
             }
@@ -47,6 +55,7 @@ async fn deliver_batch(
     pool: &PgPool,
     client: &Client,
     config: &DeliveryConfig,
+    metrics: &Metrics,
 ) -> anyhow::Result<usize> {
     // Phase 1: claim rows in a short transaction, then commit to release locks.
     // Without this split, FOR UPDATE SKIP LOCKED holds row locks across all HTTP
@@ -95,13 +104,25 @@ async fn deliver_batch(
 
     // Phase 2: deliver without holding any database lock.
     for row in &rows {
-        let result = client
-            .post(&row.endpoint)
-            .header("content-type", "application/json")
-            .header("x-amz-sns-message-type", "Notification")
-            .json(&row.payload)
-            .send()
-            .await;
+        let span = tracing::info_span!(
+            "delivery.attempt",
+            id = row.id,
+            endpoint = %row.endpoint,
+            attempt = row.attempt + 1,
+        );
+        let t = Instant::now();
+        let result = async {
+            client
+                .post(&row.endpoint)
+                .header("content-type", "application/json")
+                .header("x-amz-sns-message-type", "Notification")
+                .json(&row.payload)
+                .send()
+                .await
+        }
+        .instrument(span)
+        .await;
+        let elapsed = t.elapsed().as_secs_f64();
 
         let (success, error_msg) = match result {
             Ok(resp) if resp.status().is_success() => (true, None),
@@ -109,13 +130,27 @@ async fn deliver_batch(
             Err(e) => (false, Some(e.to_string())),
         };
 
+        let outcome = if success { "success" } else { "failure" };
+        metrics
+            .delivery_attempt_duration_seconds
+            .with_label_values(&[outcome])
+            .observe(elapsed);
+
         if success {
-            sqlx::query!("DELETE FROM queue.event_deliveries WHERE id = $1", row.id)
+            if let Err(e) = sqlx::query!("DELETE FROM queue.event_deliveries WHERE id = $1", row.id)
                 .execute(pool)
-                .await?;
+                .await
+            {
+                tracing::error!(id = row.id, error = %e, "failed to delete delivered event; will retry on next poll");
+                continue;
+            }
+            metrics
+                .delivery_attempts_total
+                .with_label_values(&["success"])
+                .inc();
         } else {
             let next_attempt_at = Utc::now() + backoff(row.attempt + 1);
-            sqlx::query!(
+            if let Err(e) = sqlx::query!(
                 r#"UPDATE queue.event_deliveries
                    SET attempt = attempt + 1, last_error = $1, next_attempt_at = $2
                    WHERE id = $3"#,
@@ -124,7 +159,15 @@ async fn deliver_batch(
                 row.id,
             )
             .execute(pool)
-            .await?;
+            .await
+            {
+                tracing::error!(id = row.id, error = %e, "failed to record delivery failure; will retry on next poll");
+                continue;
+            }
+            metrics
+                .delivery_attempts_total
+                .with_label_values(&["failure"])
+                .inc();
             tracing::warn!(
                 id = row.id,
                 endpoint = %row.endpoint,
@@ -133,6 +176,33 @@ async fn deliver_batch(
                 "http delivery failed"
             );
         }
+    }
+
+    // Phase 3: sweep rows that have exhausted all attempts. These are filtered
+    // out of phase 1 by the WHERE clause but never removed, causing silent
+    // accumulation. Delete and log them so failures are visible.
+    let exhausted = match sqlx::query!(
+        r#"DELETE FROM queue.event_deliveries
+           WHERE attempt >= max_attempts
+           RETURNING id AS "id!: i64", endpoint AS "endpoint!""#
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(error = %e, "exhausted-delivery sweep failed");
+            return Ok(rows.len());
+        }
+    };
+
+    for row in &exhausted {
+        tracing::error!(
+            id = row.id,
+            endpoint = %row.endpoint,
+            "http delivery permanently failed: max_attempts reached, discarding"
+        );
+        metrics.delivery_exhausted_total.inc();
     }
 
     Ok(rows.len())

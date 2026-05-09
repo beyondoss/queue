@@ -2,6 +2,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+/// Response extension inserted when a request fails due to database pool exhaustion.
+/// Consumed by the `record_metrics` middleware to increment `db_pool_acquire_timeouts_total`.
+#[derive(Clone)]
+pub struct DbPoolTimeout;
+
 /// Inner error payload for all non-2xx responses.
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct ErrorBody {
@@ -46,6 +51,22 @@ pub enum ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // Pool exhaustion gets a distinct 503 and a response extension so the
+        // record_metrics middleware can increment db_pool_acquire_timeouts_total.
+        if matches!(self, ApiError::Database(sqlx::Error::PoolTimedOut)) {
+            tracing::error!("database pool exhausted: acquire timeout");
+            let body = ErrorResponse {
+                error: ErrorBody {
+                    code: "service_unavailable".into(),
+                    message: "Service temporarily unavailable".into(),
+                    hint: None,
+                },
+            };
+            let mut resp = (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
+            resp.extensions_mut().insert(DbPoolTimeout);
+            return resp;
+        }
+
         let (status, code, message) = match &self {
             ApiError::QueueNotFound(name) => (
                 StatusCode::NOT_FOUND,

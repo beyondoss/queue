@@ -1,7 +1,10 @@
+use std::time::Instant;
+
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -187,6 +190,7 @@ pub async fn send_messages(
     let sync_commit = !async_commit;
     match body {
         SendBody::Single(req) => {
+            let t = Instant::now();
             let msg_id = if let Some(ref group_id) = req.group_id {
                 // FIFO sends bypass the coalescer — no batch API for FIFO.
                 send::send_message_fifo(
@@ -223,6 +227,16 @@ pub async fn send_messages(
                 .await?
                 .msg_id
             };
+            state
+                .metrics
+                .message_send_duration_seconds
+                .with_label_values(&[&name])
+                .observe(t.elapsed().as_secs_f64());
+            state
+                .metrics
+                .messages_sent_total
+                .with_label_values(&[&name])
+                .inc();
             Ok((
                 StatusCode::CREATED,
                 Json(SendResponse::Single { id: msg_id }),
@@ -235,6 +249,7 @@ pub async fn send_messages(
             let has_group_ids = reqs.iter().any(|r| r.group_id.is_some());
             if has_group_ids {
                 let mut ids = Vec::with_capacity(reqs.len());
+                let t = Instant::now();
                 for req in &reqs {
                     let group_id = req.group_id.as_deref().ok_or_else(|| {
                         ApiError::BadRequest(
@@ -254,11 +269,22 @@ pub async fn send_messages(
                     .await?;
                     ids.push(r.msg_id);
                 }
+                state
+                    .metrics
+                    .message_send_duration_seconds
+                    .with_label_values(&[&name])
+                    .observe(t.elapsed().as_secs_f64());
+                state
+                    .metrics
+                    .messages_sent_total
+                    .with_label_values(&[&name])
+                    .inc_by(ids.len() as f64);
                 Ok((StatusCode::CREATED, Json(SendResponse::Batch { ids })))
             } else if let Some(ref coalescer) = state.coalescer {
                 // Route each message through the coalescer; they'll likely land
                 // in the same linger window and be flushed as a single batch.
                 let mut ids = Vec::with_capacity(reqs.len());
+                let t = Instant::now();
                 for req in reqs {
                     let id = coalescer
                         .send(
@@ -271,10 +297,21 @@ pub async fn send_messages(
                         .await?;
                     ids.push(id);
                 }
+                state
+                    .metrics
+                    .message_send_duration_seconds
+                    .with_label_values(&[&name])
+                    .observe(t.elapsed().as_secs_f64());
+                state
+                    .metrics
+                    .messages_sent_total
+                    .with_label_values(&[&name])
+                    .inc_by(ids.len() as f64);
                 Ok((StatusCode::CREATED, Json(SendResponse::Batch { ids })))
             } else {
                 let delay = reqs.first().map(|r| r.delay).unwrap_or(0);
                 let all_same_delay = reqs.iter().all(|r| r.delay == delay);
+                let t = Instant::now();
                 if all_same_delay {
                     let has_headers = reqs.iter().any(|r| r.headers.is_some());
                     let messages: Vec<serde_json::Value> =
@@ -291,6 +328,16 @@ pub async fn send_messages(
                     let result =
                         send::send_batch(&state.pool, &name, messages, headers, delay, sync_commit)
                             .await?;
+                    state
+                        .metrics
+                        .message_send_duration_seconds
+                        .with_label_values(&[&name])
+                        .observe(t.elapsed().as_secs_f64());
+                    state
+                        .metrics
+                        .messages_sent_total
+                        .with_label_values(&[&name])
+                        .inc_by(result.msg_ids.len() as f64);
                     Ok((
                         StatusCode::CREATED,
                         Json(SendResponse::Batch {
@@ -312,6 +359,16 @@ pub async fn send_messages(
                         .await?;
                         ids.push(r.msg_id);
                     }
+                    state
+                        .metrics
+                        .message_send_duration_seconds
+                        .with_label_values(&[&name])
+                        .observe(t.elapsed().as_secs_f64());
+                    state
+                        .metrics
+                        .messages_sent_total
+                        .with_label_values(&[&name])
+                        .inc_by(ids.len() as f64);
                     Ok((StatusCode::CREATED, Json(SendResponse::Batch { ids })))
                 }
             }
@@ -343,23 +400,58 @@ pub async fn receive_messages(
     Path(name): Path<String>,
     Query(params): Query<ReceiveQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let t = Instant::now();
     let messages = if params.fifo {
         receive::receive_messages_fifo(&state.pool, &name, params.max, params.vt, params.wait)
             .await?
     } else {
         receive::receive_messages(&state.pool, &name, params.max, params.vt, params.wait).await?
     };
+    state
+        .metrics
+        .message_receive_duration_seconds
+        .with_label_values(&[&name])
+        .observe(t.elapsed().as_secs_f64());
+
+    let now = Utc::now();
+    let mut redelivered = 0u64;
     let response: Vec<MessageResponse> = messages
         .into_iter()
-        .map(|m| MessageResponse {
-            id: m.msg_id,
-            read_count: m.read_count,
-            enqueued_at: m.enqueued_at,
-            visible_at: m.visible_at,
-            message: m.message,
-            headers: m.headers,
+        .map(|m| {
+            let age = (now - m.enqueued_at).num_milliseconds().max(0) as f64 / 1000.0;
+            state
+                .metrics
+                .message_age_at_receive_seconds
+                .with_label_values(&[&name])
+                .observe(age);
+            if m.read_count > 1 {
+                redelivered += 1;
+            }
+            MessageResponse {
+                id: m.msg_id,
+                read_count: m.read_count,
+                enqueued_at: m.enqueued_at,
+                visible_at: m.visible_at,
+                message: m.message,
+                headers: m.headers,
+            }
         })
         .collect();
+
+    let count = response.len() as f64;
+    state
+        .metrics
+        .messages_received_total
+        .with_label_values(&[&name])
+        .inc_by(count);
+    if redelivered > 0 {
+        state
+            .metrics
+            .messages_redelivered_total
+            .with_label_values(&[&name])
+            .inc_by(redelivered as f64);
+    }
+
     Ok(Json(response))
 }
 
@@ -383,8 +475,19 @@ pub async fn delete_message(
     State(state): State<AppState>,
     Path((name, id)): Path<(String, i64)>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let t = Instant::now();
     let deleted = delete::delete_message(&state.pool, &name, id).await?;
+    state
+        .metrics
+        .message_delete_duration_seconds
+        .with_label_values(&[&name])
+        .observe(t.elapsed().as_secs_f64());
     if deleted {
+        state
+            .metrics
+            .messages_deleted_total
+            .with_label_values(&[&name])
+            .inc();
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::MessageNotFound)
@@ -412,7 +515,18 @@ pub async fn delete_batch(
     Path(name): Path<String>,
     Json(body): Json<DeleteBatchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let t = Instant::now();
     let deleted = delete::delete_batch(&state.pool, &name, &body.ids).await?;
+    state
+        .metrics
+        .message_delete_duration_seconds
+        .with_label_values(&[&name])
+        .observe(t.elapsed().as_secs_f64());
+    state
+        .metrics
+        .messages_deleted_total
+        .with_label_values(&[&name])
+        .inc_by(deleted.len() as f64);
     Ok(Json(DeletedResponse { deleted }))
 }
 

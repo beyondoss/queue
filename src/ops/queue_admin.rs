@@ -105,6 +105,40 @@ pub async fn get_queue_metrics(pool: &PgPool, queue_name: &str) -> Result<QueueM
     })
 }
 
+pub struct QueueDepthSnapshot {
+    pub queue_name: String,
+    /// Currently visible (receivable) messages.
+    pub visible: i64,
+    /// Non-visible messages: in-flight (consumer-locked) plus delayed. Approximated
+    /// as total_messages − queue_length; includes messages with a future delivery time.
+    pub in_flight: i64,
+}
+
+pub async fn all_queue_depths(pool: &PgPool) -> Result<Vec<QueueDepthSnapshot>, ApiError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            q.queue_name    AS "queue_name!",
+            m.queue_length  AS "queue_length!: i64",
+            m.total_messages AS "total_messages!: i64"
+        FROM queue.list_queues(NULL) q
+        CROSS JOIN LATERAL queue.metrics(q.queue_name) m
+        "#
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(queue_error)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| QueueDepthSnapshot {
+            queue_name: r.queue_name,
+            visible: r.queue_length,
+            in_flight: (r.total_messages - r.queue_length).max(0),
+        })
+        .collect())
+}
+
 pub async fn purge_queue(pool: &PgPool, queue_name: &str) -> Result<i64, ApiError> {
     let row = sqlx::query!(
         r#"SELECT queue.purge_queue($1) AS "count!: i64""#,

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::PgPool;
@@ -7,6 +8,7 @@ use tokio::task::JoinHandle;
 
 use super::send::{send_batch, send_message};
 use crate::error::ApiError;
+use crate::metrics::Metrics;
 
 /// One pending send operation waiting for a msg_id from the coalescing loop.
 pub struct PendingMessage {
@@ -55,9 +57,9 @@ impl Coalescer {
 /// message is flushed immediately after the first one arrives, which still
 /// allows multiple in-flight messages to be grouped if they arrived before the
 /// flush began).
-pub fn start(pool: PgPool, linger_ms: u64) -> (Coalescer, JoinHandle<()>) {
+pub fn start(pool: PgPool, linger_ms: u64, metrics: Arc<Metrics>) -> (Coalescer, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<PendingMessage>(16_384);
-    let handle = tokio::spawn(run(pool, rx, linger_ms));
+    let handle = tokio::spawn(run(pool, rx, linger_ms, metrics));
     (Coalescer(tx), handle)
 }
 
@@ -65,7 +67,12 @@ pub fn start(pool: PgPool, linger_ms: u64) -> (Coalescer, JoinHandle<()>) {
 // Background task
 // ---------------------------------------------------------------------------
 
-async fn run(pool: PgPool, mut rx: mpsc::Receiver<PendingMessage>, linger_ms: u64) {
+async fn run(
+    pool: PgPool,
+    mut rx: mpsc::Receiver<PendingMessage>,
+    linger_ms: u64,
+    metrics: Arc<Metrics>,
+) {
     let linger = Duration::from_millis(linger_ms);
 
     loop {
@@ -83,6 +90,9 @@ async fn run(pool: PgPool, mut rx: mpsc::Receiver<PendingMessage>, linger_ms: u6
             pending.push(msg);
         }
 
+        metrics
+            .coalescer_flush_batch_size
+            .observe(pending.len() as f64);
         flush(&pool, pending).await;
     }
 }

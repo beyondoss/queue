@@ -2,6 +2,7 @@ use sqlx::PgPool;
 
 use crate::error::ApiError;
 
+#[tracing::instrument(skip(pool))]
 pub async fn delete_message(
     pool: &PgPool,
     queue_name: &str,
@@ -18,6 +19,7 @@ pub async fn delete_message(
     Ok(row.deleted)
 }
 
+#[tracing::instrument(skip(pool), fields(count = msg_ids.len()))]
 pub async fn delete_batch(
     pool: &PgPool,
     queue_name: &str,

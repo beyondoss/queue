@@ -7,6 +7,7 @@ pub struct SendResult {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(pool, message, headers, deduplication_id))]
 pub async fn send_message_fifo(
     pool: &PgPool,
     queue_name: &str,
@@ -34,6 +35,7 @@ pub async fn send_message_fifo(
     Ok(SendResult { msg_id: row.msg_id })
 }
 
+#[tracing::instrument(skip(pool, message, headers))]
 pub async fn send_message(
     pool: &PgPool,
     queue_name: &str,
@@ -61,6 +63,7 @@ pub struct BatchSendResult {
     pub msg_ids: Vec<i64>,
 }
 
+#[tracing::instrument(skip(pool, messages, headers), fields(count = messages.len()))]
 pub async fn send_batch(
     pool: &PgPool,
     queue_name: &str,

@@ -118,5 +118,47 @@ define_metrics! {
         histogram_vec http_request_duration_seconds("http_request_duration_seconds")["method", "path"]
             buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]
             => "HTTP request duration in seconds",
+        counter_vec messages_sent_total("messages_sent_total")["queue"]
+            => "Total messages enqueued",
+        counter_vec messages_received_total("messages_received_total")["queue"]
+            => "Total messages delivered to consumers",
+        counter_vec messages_deleted_total("messages_deleted_total")["queue"]
+            => "Total messages deleted (acknowledged)",
+        counter_vec messages_redelivered_total("messages_redelivered_total")["queue"]
+            => "Total messages received with read_count > 1 (consumer did not ack before vt expiry)",
+        histogram_vec message_send_duration_seconds("message_send_duration_seconds")["queue"]
+            buckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+            => "Message send operation duration in seconds",
+        histogram_vec message_receive_duration_seconds("message_receive_duration_seconds")["queue"]
+            buckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+            => "Message receive operation duration in seconds",
+        histogram_vec message_delete_duration_seconds("message_delete_duration_seconds")["queue"]
+            buckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+            => "Message delete operation duration in seconds",
+        histogram_vec message_age_at_receive_seconds("message_age_at_receive_seconds")["queue"]
+            buckets = [0.1, 0.5, 1.0, 5.0, 15.0, 30.0, 60.0, 300.0, 900.0, 3600.0]
+            => "Message age when received (time from enqueue to first delivery) in seconds",
+        counter_vec delivery_attempts_total("delivery_attempts_total")["outcome"]
+            => "HTTP webhook delivery attempts by outcome (success|failure)",
+        histogram_vec delivery_attempt_duration_seconds("delivery_attempt_duration_seconds")["outcome"]
+            buckets = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+            => "HTTP webhook delivery attempt duration in seconds",
+        counter delivery_exhausted_total("delivery_exhausted_total")
+            => "Webhook deliveries permanently abandoned after exhausting max_attempts",
+        histogram coalescer_flush_batch_size("coalescer_flush_batch_size")
+            buckets = [1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 500.0, 1000.0]
+            => "Number of messages per coalescer flush batch",
+        gauge_vec queue_depth("queue_depth")["queue"]
+            => "Current number of visible messages in the queue",
+        gauge_vec queue_in_flight("queue_in_flight")["queue"]
+            => "Current number of in-flight (consumer-locked or delayed) messages",
+        gauge db_pool_size("db_pool_size")
+            => "Current total connections in the database pool (idle + active)",
+        gauge db_pool_idle("db_pool_idle")
+            => "Current idle connections in the database pool",
+        gauge db_pool_active("db_pool_active")
+            => "Current active (checked-out) connections in the database pool",
+        counter db_pool_acquire_timeouts_total("db_pool_acquire_timeouts_total")
+            => "Total database pool acquire timeout errors (pool exhausted)",
     }
 }

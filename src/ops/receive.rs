@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, queue_error};
 
+#[tracing::instrument(skip(pool))]
 pub async fn receive_messages_fifo(
     pool: &PgPool,
     queue_name: &str,
@@ -27,7 +28,8 @@ pub async fn receive_messages_fifo(
         wait_secs,
     )
     .fetch_all(pool)
-    .await?;
+    .await
+    .map_err(queue_error)?;
 
     Ok(rows
         .into_iter()
@@ -51,6 +53,7 @@ pub struct Message {
     pub headers: Option<serde_json::Value>,
 }
 
+#[tracing::instrument(skip(pool))]
 pub async fn receive_messages(
     pool: &PgPool,
     queue_name: &str,
@@ -75,7 +78,8 @@ pub async fn receive_messages(
         wait_secs,
     )
     .fetch_all(pool)
-    .await?;
+    .await
+    .map_err(queue_error)?;
 
     Ok(rows
         .into_iter()

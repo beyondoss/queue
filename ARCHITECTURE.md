@@ -11,7 +11,8 @@ beyond-queue is an HTTP service that accepts SQS-compatible and native REST requ
 ```
 HTTP request
      │
-     ├── GET /healthz ───────────────────────────────► 200 OK  (no auth)
+     ├── GET /livez ─────────────────────────────────► 200 OK  (no auth)
+     ├── GET /readyz ────────────────────────────────► 200 / 503  (no auth)
      │
      ▼
 require_auth middleware
@@ -237,7 +238,8 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 
 **Unauthenticated endpoints:**
 
-- `GET /healthz` — returns 200 OK unconditionally.
+- `GET /livez` — liveness check; always returns 200. Use for Kubernetes `livenessProbe` to avoid restart loops during DB outages.
+- `GET /readyz` — readiness check; queries the DB (`SELECT 1`). Returns 200 when healthy, 503 when the DB is unreachable. Use for Kubernetes `readinessProbe`.
 
 ---
 
@@ -256,6 +258,7 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | `HTTP_DELIVERY_ENABLED`      | `true`                  | Enable the background HTTP/HTTPS delivery worker.                                                                 |
 | `HTTP_DELIVERY_POLL_MS`      | `1000`                  | Delivery worker poll interval (ms). Lower values increase responsiveness at the cost of idle DB load.             |
 | `HTTP_DELIVERY_TIMEOUT_SECS` | `5`                     | Per-request timeout for outbound webhook POSTs.                                                                   |
+| `HTTP_DELIVERY_BATCH_SIZE`   | `50`                    | Maximum rows the delivery worker claims per poll cycle. Tune up under high SNS fanout load.                       |
 
 ---
 
@@ -282,7 +285,7 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 | Path                                    | What It Does                                                                                                                                                                                                                                                         |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.rs`                           | Binary entry point; delegates to `beyond_queue::run()`. Sets jemalloc as allocator.                                                                                                                                                                                  |
-| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SNS/SQS gateway at `POST /` + SQS path handler + `/healthz`. Attaches `require_auth` to all except healthz.                                                                                                                   |
+| `src/lib.rs`                            | Wires the axum router: `/v1/` (REST) + SNS/SQS gateway at `POST /` + SQS path handler + `/livez` + `/readyz`. Attaches `require_auth` to all except liveness/readiness probes.                                                                                       |
 | `src/config.rs`                         | `Config` struct parsed from CLI args / env vars via clap.                                                                                                                                                                                                            |
 | `src/db.rs`                             | Creates `PgPool` with `max_connections`.                                                                                                                                                                                                                             |
 | `src/middleware/auth.rs`                | Checks for presence of `Authorization` header; rejects with 403 if absent.                                                                                                                                                                                           |

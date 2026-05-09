@@ -29,13 +29,16 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
         log_level: "error".into(),
         otlp_enabled: false,
         otlp_endpoint: "http://localhost:4317".into(),
+        otlp_sample_rate: 0.1,
         base_url_override: Some(format!("http://{addr}")),
         http_delivery_enabled: false,
         http_delivery_poll_ms: 50,
         http_delivery_timeout_secs: 5,
+        http_delivery_batch_size: 50,
     };
 
-    let (coalescer, _) = crate::ops::coalesce::start(pool.clone(), linger_ms);
+    let metrics = Arc::new(crate::metrics::Metrics::new());
+    let (coalescer, _) = crate::ops::coalesce::start(pool.clone(), linger_ms, metrics.clone());
     let base_url: Arc<str> = config.base_url().into();
     let signer = Arc::new(Signer::generate()?);
     let state = AppState {
@@ -44,7 +47,7 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
         base_url,
         coalescer: Some(coalescer),
         signer,
-        metrics: Arc::new(crate::metrics::Metrics::new()),
+        metrics,
     };
     let app = crate::build_router(state);
 
@@ -76,10 +79,12 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         log_level: "error".into(),
         otlp_enabled: false,
         otlp_endpoint: "http://localhost:4317".into(),
+        otlp_sample_rate: 0.1,
         base_url_override: Some(format!("http://{addr}")),
         http_delivery_enabled: true,
         http_delivery_poll_ms: 50,
         http_delivery_timeout_secs: 5,
+        http_delivery_batch_size: 50,
     };
 
     // Start delivery worker with fast poll for tests; detach the handle since
@@ -91,6 +96,7 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
             delivery_timeout_secs: 5,
             batch_size: 50,
         },
+        Arc::new(crate::metrics::Metrics::new()),
     )?);
 
     let base_url: Arc<str> = config.base_url().into();

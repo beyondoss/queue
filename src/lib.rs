@@ -14,7 +14,7 @@ pub mod test_support;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -26,7 +26,7 @@ use axum::routing::{get, post};
 use sqlx::PgPool;
 
 use config::Config;
-use error::ApiError;
+use error::{ApiError, DbPoolTimeout};
 use metrics::Metrics;
 use ops::coalesce::Coalescer;
 use signing::Signer;
@@ -86,15 +86,17 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         enabled: config.otlp_enabled,
         otlp_endpoint: config.otlp_endpoint.clone(),
         service_name: "beyond-queue".into(),
-        sample_rate: 1.0,
+        sample_rate: config.otlp_sample_rate,
     };
     let _otel_guard = telemetry::init(&otel_config, vec![], &config.log_level)?;
 
     let pool = db::connect(&config.database_url, config.max_connections).await?;
 
+    let metrics = Arc::new(Metrics::new());
+
     let (coalescer, coalescer_handle) = if config.linger_ms > 0 {
         tracing::info!(linger_ms = config.linger_ms, "write coalescer enabled");
-        let (c, h) = ops::coalesce::start(pool.clone(), config.linger_ms);
+        let (c, h) = ops::coalesce::start(pool.clone(), config.linger_ms, metrics.clone());
         (Some(c), Some(h))
     } else {
         (None, None)
@@ -107,12 +109,15 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             ops::delivery::DeliveryConfig {
                 poll_interval_ms: config.http_delivery_poll_ms,
                 delivery_timeout_secs: config.http_delivery_timeout_secs,
-                batch_size: 50,
+                batch_size: config.http_delivery_batch_size,
             },
+            metrics.clone(),
         )?)
     } else {
         None
     };
+
+    let scrape_handle = start_queue_depth_scrape(pool.clone(), metrics.clone());
 
     let signer = Arc::new(Signer::generate()?);
     let base_url: Arc<str> = config.base_url().into();
@@ -123,7 +128,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         base_url,
         coalescer,
         signer,
-        metrics: Arc::new(Metrics::new()),
+        metrics,
     };
 
     let app = build_router(state);
@@ -135,6 +140,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 
     tracing::info!("draining workers");
 
+    scrape_handle.abort();
+    let _ = scrape_handle.await;
+
     // Delivery: abort the task (lease-based design makes this abort-safe —
     // any mid-flight rows resurface after their lease expires).
     if let Some(h) = delivery_handle {
@@ -144,8 +152,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 
     // Coalescer: AppState (and the Coalescer sender) was dropped when axum::serve
     // returned, closing the channel. The task exits naturally on the next recv().
-    if let Some(h) = coalescer_handle {
-        let _ = h.await;
+    if let Some(h) = coalescer_handle
+        && tokio::time::timeout(Duration::from_secs(10), h)
+            .await
+            .is_err()
+    {
+        tracing::warn!("coalescer did not drain within shutdown deadline");
     }
 
     tracing::info!("shutdown complete");
@@ -235,6 +247,7 @@ async fn gateway_handler(
 
 pub fn build_router(state: AppState) -> Router {
     use axum::Json;
+    use axum::extract::DefaultBodyLimit;
     use routes::ApiDoc;
     use utoipa::OpenApi;
 
@@ -248,14 +261,17 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/", post(gateway_handler))
         .merge(sqs::router())
+        .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
         .layer(from_fn(middleware::auth::require_auth));
 
     Router::new()
         .merge(api)
-        .route("/healthz", get(healthz))
+        .route("/livez", get(healthz_live))
+        .route("/readyz", get(healthz_ready))
         .route("/metrics", get(metrics_handler))
         .route("/SimpleNotificationService.pem", get(serve_signing_cert))
         .route_layer(from_fn_with_state(state.clone(), record_metrics))
+        .layer(from_fn(propagate_trace_context))
         .with_state(state)
 }
 
@@ -281,6 +297,17 @@ async fn record_metrics(State(state): State<AppState>, req: Request, next: Next)
         .with_label_values(&[method.as_str(), &path, &status])
         .inc();
     timer.observe(start.elapsed().as_secs_f64());
+    let pool_size = state.pool.size() as usize;
+    let pool_idle = state.pool.num_idle();
+    state.metrics.db_pool_size.set(pool_size as f64);
+    state.metrics.db_pool_idle.set(pool_idle as f64);
+    state
+        .metrics
+        .db_pool_active
+        .set((pool_size - pool_idle) as f64);
+    if response.extensions().get::<DbPoolTimeout>().is_some() {
+        state.metrics.db_pool_acquire_timeouts_total.inc();
+    }
 
     response
 }
@@ -288,7 +315,10 @@ async fn record_metrics(State(state): State<AppState>, req: Request, next: Next)
 async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         state.metrics.encode(),
     )
         .into_response()
@@ -301,22 +331,83 @@ async fn serve_signing_cert(State(state): State<AppState>) -> impl IntoResponse 
     )
 }
 
-async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
+async fn healthz_live() -> impl IntoResponse {
     #[derive(serde::Serialize)]
     struct HealthzResponse {
         status: &'static str,
+        version: &'static str,
+    }
+    (
+        StatusCode::OK,
+        axum::Json(HealthzResponse {
+            status: "ok",
+            version: env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
+async fn healthz_ready(State(state): State<AppState>) -> impl IntoResponse {
+    #[derive(serde::Serialize)]
+    struct HealthzResponse {
+        status: &'static str,
+        version: &'static str,
     }
 
-    let db_ok = sqlx::query("SELECT 1").execute(&state.pool).await.is_ok();
+    let db_ok = sqlx::query_scalar!("SELECT 1::int4")
+        .fetch_one(&state.pool)
+        .await
+        .is_ok();
 
     if db_ok {
-        (StatusCode::OK, axum::Json(HealthzResponse { status: "ok" })).into_response()
+        (
+            StatusCode::OK,
+            axum::Json(HealthzResponse {
+                status: "ok",
+                version: env!("CARGO_PKG_VERSION"),
+            }),
+        )
+            .into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(HealthzResponse { status: "degraded" }),
+            axum::Json(HealthzResponse {
+                status: "degraded",
+                version: env!("CARGO_PKG_VERSION"),
+            }),
         )
             .into_response()
     }
 }
 
+async fn propagate_trace_context(req: Request, next: Next) -> Response {
+    use tracing::Instrument as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    let span = tracing::info_span!("http.request");
+    let _ = span.set_parent(telemetry::extract_trace_context(req.headers()));
+
+    next.run(req).instrument(span).await
+}
+
+fn start_queue_depth_scrape(pool: PgPool, metrics: Arc<Metrics>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match ops::queue_admin::all_queue_depths(&pool).await {
+                Ok(snapshots) => {
+                    for s in snapshots {
+                        metrics
+                            .queue_depth
+                            .with_label_values(&[&s.queue_name])
+                            .set(s.visible as f64);
+                        metrics
+                            .queue_in_flight
+                            .with_label_values(&[&s.queue_name])
+                            .set(s.in_flight as f64);
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "queue depth scrape failed"),
+            }
+            tokio::time::sleep(Duration::from_secs(15)).await;
+        }
+    })
+}

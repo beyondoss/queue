@@ -1,3 +1,6 @@
+[env]
+POSTGRES_EXTRA_CONFIGURE_OPTIONS = "--without-icu"
+
 [tools]
 dprint = "latest"
 rust = { version = "1.92", components = "rustfmt,clippy", targets = "aarch64-unknown-linux-gnu,x86_64-unknown-linux-gnu" }
@@ -6,6 +9,7 @@ cargo-binstall = "latest"
 "cargo:sqlx-cli" = "latest"
 "cargo:cross" = "latest"
 node = "lts"
+postgres = "18"
 
 [tasks."build:rs"]
 run = "cargo build"
@@ -19,7 +23,10 @@ dir = "sdk/ts"
 depends = ["generate:types"]
 
 [tasks."check:rs"]
-run = "cargo clippy --workspace -- -D warnings"
+run = [
+  "cargo clippy --workspace --exclude beyond-queue-extension -- -D warnings",
+  "PGRX_PG_CONFIG_PATH=$(which pg_config) cargo clippy -p beyond-queue-extension --features pg18 -- -D warnings",
+]
 
 [tasks."check:ts"]
 run = "npm run typecheck --workspaces --if-present"

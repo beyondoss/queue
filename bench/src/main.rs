@@ -708,7 +708,7 @@ async fn run_receive(
             while received < per_worker {
                 let want = (per_worker - received).min(10) as i32;
                 let t = Instant::now();
-                let rows: Vec<(i64,)> = sqlx::query_as(&format!("{}", rx_sql()))
+                let rows: Vec<(i64,)> = sqlx::query_as(&rx_sql())
                     .bind(&queue)
                     .bind(want)
                     .fetch_all(pool.as_ref())
@@ -785,7 +785,7 @@ async fn run_receive_sharded(
             while received < per_shard {
                 let want = (per_shard - received).min(10) as i32;
                 let t = Instant::now();
-                let rows: Vec<(i64,)> = sqlx::query_as(&format!("{}", rx_sql()))
+                let rows: Vec<(i64,)> = sqlx::query_as(&rx_sql())
                     .bind(&queue)
                     .bind(want)
                     .fetch_all(pool.as_ref())

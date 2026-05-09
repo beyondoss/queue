@@ -30,6 +30,11 @@ pub struct Config {
     #[arg(long, env = "OTLP_ENDPOINT", default_value = "http://localhost:4317")]
     pub otlp_endpoint: String,
 
+    /// OTLP trace sample rate (0.0 = never, 1.0 = always, 0.1 = 10%).
+    /// Only effective when OTLP_ENABLED=true.
+    #[arg(long, env = "OTLP_SAMPLE_RATE", default_value_t = 0.1)]
+    pub otlp_sample_rate: f64,
+
     /// Write coalescing linger window in milliseconds.
     ///
     /// Non-FIFO sends are held for up to this duration and flushed as a single
@@ -55,6 +60,10 @@ pub struct Config {
     /// Delivery worker per-request timeout in seconds.
     #[arg(long, env = "HTTP_DELIVERY_TIMEOUT_SECS", default_value = "5")]
     pub http_delivery_timeout_secs: u64,
+
+    /// Delivery worker maximum rows to claim per poll cycle.
+    #[arg(long, env = "HTTP_DELIVERY_BATCH_SIZE", default_value = "50")]
+    pub http_delivery_batch_size: i64,
 }
 
 impl Config {
