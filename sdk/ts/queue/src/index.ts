@@ -21,11 +21,15 @@ export {
   type CreateQueueOptions,
   type Message,
   type Queue,
+  type QueueBodyType,
   type QueueClient,
   type QueueClientOptions,
   type QueueResult,
+  type QueueSchemaClient,
+  type QueueSchemaMap,
   type QueueStats,
   type ReceiveOptions,
+  type Schema,
   type SendOptions,
 } from "./client.js";
 export { QueueError } from "./errors.js";

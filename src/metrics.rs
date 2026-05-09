@@ -118,6 +118,8 @@ define_metrics! {
         histogram_vec http_request_duration_seconds("http_request_duration_seconds")["method", "path"]
             buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]
             => "HTTP request duration in seconds",
+        gauge http_connections_active("http_connections_active")
+            => "HTTP requests currently in flight",
         counter_vec messages_sent_total("messages_sent_total")["queue"]
             => "Total messages enqueued",
         counter_vec messages_received_total("messages_received_total")["queue"]

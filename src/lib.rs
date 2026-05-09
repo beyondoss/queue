@@ -20,10 +20,11 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::middleware::{Next, from_fn, from_fn_with_state};
+use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use sqlx::PgPool;
+use tower_http::trace::{MakeSpan, TraceLayer};
 
 use config::Config;
 use error::{ApiError, DbPoolTimeout};
@@ -245,9 +246,33 @@ async fn gateway_handler(
     sqs::handle_service_request(state, headers, body).await
 }
 
+/// Propagates W3C trace context (`traceparent`/`tracestate`) from incoming
+/// requests so spans are children of the caller's trace, not fresh roots.
+#[derive(Clone, Default)]
+struct OtelMakeSpan;
+
+impl<B> MakeSpan<B> for OtelMakeSpan {
+    fn make_span(&mut self, request: &axum::http::Request<B>) -> tracing::Span {
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+        let span = tracing::info_span!(
+            "http.request",
+            otel.kind = "server",
+            http.method = request.method().as_str(),
+            http.target = %request.uri(),
+            http.flavor = ?request.version(),
+            http.route = tracing::field::Empty,
+            http.status_code = tracing::field::Empty,
+        );
+        let _ = span.set_parent(telemetry::extract_trace_context(request.headers()));
+        span
+    }
+}
+
 pub fn build_router(state: AppState) -> Router {
     use axum::Json;
     use axum::extract::DefaultBodyLimit;
+    use axum::middleware::from_fn;
     use routes::ApiDoc;
     use utoipa::OpenApi;
 
@@ -271,17 +296,19 @@ pub fn build_router(state: AppState) -> Router {
         .route("/metrics", get(metrics_handler))
         .route("/SimpleNotificationService.pem", get(serve_signing_cert))
         .route_layer(from_fn_with_state(state.clone(), record_metrics))
-        .layer(from_fn(propagate_trace_context))
+        .layer(TraceLayer::new_for_http().make_span_with(OtelMakeSpan))
         .with_state(state)
 }
 
 async fn record_metrics(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    state.metrics.http_connections_active.inc();
     let method = req.method().clone();
     let path = req
         .extensions()
         .get::<MatchedPath>()
         .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| req.uri().path().to_string());
+        .unwrap_or_else(|| "<unmatched>".to_string());
+    tracing::Span::current().record("http.route", &path);
     let timer = state
         .metrics
         .http_request_duration_seconds
@@ -290,6 +317,7 @@ async fn record_metrics(State(state): State<AppState>, req: Request, next: Next)
 
     let response = next.run(req).await;
 
+    state.metrics.http_connections_active.dec();
     let status = response.status().as_u16().to_string();
     state
         .metrics
@@ -353,7 +381,7 @@ async fn healthz_ready(State(state): State<AppState>) -> impl IntoResponse {
         version: &'static str,
     }
 
-    let db_ok = sqlx::query_scalar!("SELECT 1::int4")
+    let db_ok = sqlx::query!("SELECT 1 AS ping")
         .fetch_one(&state.pool)
         .await
         .is_ok();
@@ -377,16 +405,6 @@ async fn healthz_ready(State(state): State<AppState>) -> impl IntoResponse {
         )
             .into_response()
     }
-}
-
-async fn propagate_trace_context(req: Request, next: Next) -> Response {
-    use tracing::Instrument as _;
-    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-
-    let span = tracing::info_span!("http.request");
-    let _ = span.set_parent(telemetry::extract_trace_context(req.headers()));
-
-    next.run(req).instrument(span).await
 }
 
 fn start_queue_depth_scrape(pool: PgPool, metrics: Arc<Metrics>) -> tokio::task::JoinHandle<()> {

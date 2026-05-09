@@ -18,11 +18,15 @@ export { createEventClient } from "./client.js";
 export type {
   EventClient,
   EventClientOptions,
+  EventPayloadType,
   EventResult,
+  EventSchemaClient,
+  EventSchemaMap,
   EventTarget,
   JsonValue,
   PublishOptions,
   PublishResult,
+  Schema,
   Subscription,
 } from "./client.js";
 export { EventError } from "./errors.js";

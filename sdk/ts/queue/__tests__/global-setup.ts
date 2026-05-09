@@ -29,7 +29,7 @@ async function waitForHealthy(url: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${url}/healthz`);
+      const res = await fetch(`${url}/livez`);
       if (res.ok) return;
     } catch {
       // server not up yet
@@ -50,18 +50,18 @@ export async function setup(): Promise<void> {
   const sql = postgres(databaseUrl, { max: 1 });
   const schemaPath = resolve(
     __dirname,
-    "../../../../../beyond-queue-extension/sql/schema.sql",
+    "../../../../beyond-queue-extension/sql/schema.sql",
   );
   const hotPathsPath = resolve(
     __dirname,
-    "../../../../../tests/fixtures/hot_paths.sql",
+    "../../../../tests/fixtures/hot_paths.sql",
   );
   await sql.unsafe(readFileSync(schemaPath, "utf8"));
   await sql.unsafe(readFileSync(hotPathsPath, "utf8"));
   await sql.end();
 
   const binaryPath = process.env["BEYOND_QUEUE_BINARY"]
-    ?? resolve(__dirname, "../../../../../target/debug/beyond-queue");
+    ?? resolve(__dirname, "../../../../target/debug/beyond-queue");
 
   serverProcess = spawn(binaryPath, ["serve"], {
     env: {

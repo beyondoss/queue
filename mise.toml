@@ -59,8 +59,29 @@ run = "npm test"
 dir = "sdk/ts/events"
 depends = ["generate:types", "build:rs"]
 
+[tasks."test:ts"]
+depends = [
+  "test:integration:queue",
+  "test:integration:events",
+  "test:types:queue",
+  "test:types:events",
+]
+
 [tasks."test:integration:ts"]
-depends = ["test:integration:queue", "test:integration:events"]
+depends = ["test:ts"]
+
+[tasks."test:types:queue"]
+run = "npx vitest --config vitest.typecheck.config.ts --run"
+dir = "sdk/ts/queue"
+depends = ["generate:types"]
+
+[tasks."test:types:events"]
+run = "npx vitest --config vitest.typecheck.config.ts --run"
+dir = "sdk/ts/events"
+depends = ["generate:types"]
+
+[tasks."test:types:ts"]
+depends = ["test:types:queue", "test:types:events"]
 
 [tasks."generate:openapi"]
 run = "cargo run -- generate-openapi"

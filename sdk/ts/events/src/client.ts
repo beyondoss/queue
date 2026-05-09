@@ -78,6 +78,30 @@ export interface EventClientOptions {
   onResponse?: (event: EventResponseEvent) => void;
 }
 
+// ── Schema types ──────────────────────────────────────────────────────────────
+
+/** A value parser. Compatible with Zod schemas and any object with `.parse`. */
+export type Schema<T> = { parse: (value: unknown) => T };
+
+/** Maps routing key patterns (including globs) to their payload schemas. */
+export type EventSchemaMap = Record<string, Schema<unknown>>;
+
+type GlobMatch<K extends string, P extends string> = P extends
+  `${infer Pre}*${infer Suf}` ? K extends `${Pre}${string}${Suf}` ? true : false
+  : K extends P ? true
+  : false;
+
+type MatchedPattern<K extends string, Map extends EventSchemaMap> = {
+  [P in keyof Map & string]: GlobMatch<K, P> extends true ? P : never;
+}[keyof Map & string];
+
+export type EventPayloadType<K extends string, Map extends EventSchemaMap> =
+  [MatchedPattern<K, Map>] extends [never] ? JsonValue
+    : Map[MatchedPattern<K, Map> & keyof Map] extends Schema<infer T> ? T
+    : JsonValue;
+
+// ── Client interfaces ─────────────────────────────────────────────────────────
+
 export interface EventClient {
   /**
    * Publish a message to a routing key. All subscriptions whose pattern
@@ -108,6 +132,21 @@ export interface EventClient {
 
   /** Release underlying connections. Call when the client is no longer needed. */
   close(): Promise<void>;
+}
+
+/**
+ * An event client with schema-aware payload types. Returned by `createEventClient`
+ * when a `schema` map is provided. Routing keys matching a schema pattern get typed
+ * payloads; unmatched keys fall back to `JsonValue`.
+ */
+export interface EventSchemaClient<Map extends EventSchemaMap>
+  extends Omit<EventClient, "publish">
+{
+  publish<K extends string>(
+    routingKey: K,
+    payload: EventPayloadType<K, Map>,
+    opts?: PublishOptions,
+  ): EventResult<PublishResult>;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -184,22 +223,29 @@ function buildFetch(
 
 // ── Factory ───────────────────────────────────────────────────────────────────
 
+/** Creates a schema-aware event client. Publish payload types are inferred from the schema map. */
+export function createEventClient<Map extends EventSchemaMap>(
+  opts: EventClientOptions & { schema: Map },
+): EventSchemaClient<Map>;
 /** Creates an event client backed by the beyond-queue HTTP API. */
-export function createEventClient(opts: EventClientOptions = {}): EventClient {
-  const url = opts.url ?? env["BEYOND_EVENTS_URL"];
+export function createEventClient(opts?: EventClientOptions): EventClient;
+export function createEventClient(
+  opts?: EventClientOptions & { schema?: EventSchemaMap },
+): EventClient {
+  const url = opts?.url ?? env["BEYOND_EVENTS_URL"];
   if (!url) {
     throw new Error(
       "BEYOND_EVENTS_URL is required (pass `url` or set the BEYOND_EVENTS_URL env var)",
     );
   }
   const base = url.replace(/\/+$/, "");
-  const token = opts.token ?? env["BEYOND_EVENTS_TOKEN"];
-  const { onRequest, onResponse } = opts;
+  const token = opts?.token ?? env["BEYOND_EVENTS_TOKEN"];
+  const { onRequest, onResponse } = opts ?? {};
 
   const client = createFetchClient<paths>({
     baseUrl: base,
     headers: { Authorization: `Bearer ${token ?? "anon"}` },
-    fetch: buildFetch(opts.fetch, opts.retries ?? 2, opts.timeout),
+    fetch: buildFetch(opts?.fetch, opts?.retries ?? 2, opts?.timeout),
   });
 
   function cmd<A extends unknown[], R>(

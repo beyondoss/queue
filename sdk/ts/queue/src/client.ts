@@ -14,7 +14,16 @@ export type Queue = Camelize<components["schemas"]["QueueResponse"]>;
 export type QueueStats = Camelize<
   components["schemas"]["QueueMetricsResponse"]
 >;
-export type Message = Camelize<components["schemas"]["MessageResponse"]>;
+
+export type Message<T = JsonValue> = {
+  id: number;
+  message: T;
+  headers: JsonValue | null;
+  readCount: number;
+  enqueuedAt: string;
+  visibleAt: string;
+};
+
 export type JsonValue =
   | string
   | number
@@ -22,6 +31,18 @@ export type JsonValue =
   | null
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+// ── Schema types ──────────────────────────────────────────────────────────────
+
+/** A value parser. Compatible with Zod schemas and any object with `.parse`. */
+export type Schema<T> = { parse: (value: unknown) => T };
+
+/** Maps queue names to their message body schemas. */
+export type QueueSchemaMap = Record<string, Schema<unknown>>;
+
+export type QueueBodyType<K extends string, Map extends QueueSchemaMap> =
+  K extends keyof Map ? Map[K] extends Schema<infer T> ? T : JsonValue
+    : JsonValue;
 
 // ── SDK-level option types (not part of the API schema) ───────────────────────
 
@@ -36,8 +57,8 @@ export interface SendOptions {
   asyncCommit?: boolean;
 }
 
-export interface BatchEntry {
-  message: JsonValue;
+export interface BatchEntry<T = JsonValue> {
+  message: T;
   delay?: number;
   groupId?: string;
   headers?: JsonValue;
@@ -90,6 +111,8 @@ export type QueueResult<T = undefined> = Promise<
   | { data: undefined; error: QueueError; response: Response }
 >;
 
+// ── Client interfaces ─────────────────────────────────────────────────────────
+
 export interface QueueClient {
   queues: {
     create(
@@ -129,6 +152,44 @@ export interface QueueClient {
   /** Release underlying connections. Call when the client is no longer needed. */
   close(): Promise<void>;
 }
+
+/**
+ * A queue client with schema-aware message types. Returned by `createQueueClient`
+ * when a `schema` map is provided. Queue names in the schema get typed bodies;
+ * all other queue names fall back to `JsonValue`.
+ */
+export interface QueueSchemaClient<Map extends QueueSchemaMap>
+  extends Omit<QueueClient, "messages">
+{
+  messages: {
+    send<K extends string>(
+      queue: K,
+      message: QueueBodyType<K, Map>,
+      opts?: SendOptions,
+    ): QueueResult<{ id: number }>;
+    sendBatch<K extends string>(
+      queue: K,
+      entries: BatchEntry<QueueBodyType<K, Map>>[],
+      opts?: BatchOptions,
+    ): QueueResult<{ ids: number[] }>;
+    receive<K extends string>(
+      queue: K,
+      opts?: ReceiveOptions,
+    ): QueueResult<Message<QueueBodyType<K, Map>>[]>;
+    delete(queue: string, id: number): QueueResult;
+    deleteBatch(
+      queue: string,
+      ids: number[],
+    ): QueueResult<Camelize<components["schemas"]["DeletedResponse"]>>;
+    changeVisibility(
+      queue: string,
+      id: number,
+      visibilityTimeout: number,
+    ): QueueResult<Camelize<components["schemas"]["ChangeVisibilityResponse"]>>;
+  };
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
 function toQueueError(raw: unknown, response: Response): QueueError {
   const inner = raw != null && typeof raw === "object" && "error" in raw
@@ -189,22 +250,32 @@ function buildFetch(
   };
 }
 
+// ── Factory ───────────────────────────────────────────────────────────────────
+
+/** Creates a schema-aware queue client. Message bodies are typed and parsed per queue. */
+export function createQueueClient<Map extends QueueSchemaMap>(
+  opts: QueueClientOptions & { schema: Map },
+): QueueSchemaClient<Map>;
 /** Creates a queue client backed by the beyond-queue HTTP API. */
-export function createQueueClient(opts: QueueClientOptions = {}): QueueClient {
-  const url = opts.url ?? env["BEYOND_QUEUE_URL"];
+export function createQueueClient(opts?: QueueClientOptions): QueueClient;
+export function createQueueClient<Map extends QueueSchemaMap>(
+  opts?: QueueClientOptions & { schema?: Map },
+): QueueClient | QueueSchemaClient<Map> {
+  const schema = opts?.schema;
+  const url = opts?.url ?? env["BEYOND_QUEUE_URL"];
   if (!url) {
     throw new Error(
       "BEYOND_QUEUE_URL is required (pass `url` or set the BEYOND_QUEUE_URL env var)",
     );
   }
   const base = url.replace(/\/+$/, "");
-  const token = opts.token ?? env["BEYOND_QUEUE_TOKEN"];
-  const { onRequest, onResponse } = opts;
+  const token = opts?.token ?? env["BEYOND_QUEUE_TOKEN"];
+  const { onRequest, onResponse } = opts ?? {};
 
   const client = createFetchClient<paths>({
     baseUrl: base,
     headers: { Authorization: `Bearer ${token ?? "anon"}` },
-    fetch: buildFetch(opts.fetch, opts.retries ?? 2, opts.timeout),
+    fetch: buildFetch(opts?.fetch, opts?.retries ?? 2, opts?.timeout),
   });
 
   // Wraps a method to fire onRequest/onResponse hooks around it.
@@ -330,8 +401,8 @@ export function createQueueClient(opts: QueueClientOptions = {}): QueueClient {
         return { data: data as { ids: number[] }, error: undefined, response };
       }),
 
-      receive: cmd("messages.receive", (queue, rOpts) =>
-        wrap(
+      receive: cmd("messages.receive", async (queue, rOpts) => {
+        const result = await wrap(
           client.GET("/v1/queues/{name}/messages", {
             params: {
               path: { name: queue },
@@ -345,7 +416,23 @@ export function createQueueClient(opts: QueueClientOptions = {}): QueueClient {
               },
             },
           }),
-        )),
+        ) as unknown as
+          | { data: Message[]; error: undefined; response: Response }
+          | { data: undefined; error: QueueError; response: Response };
+        if (!result.error && schema) {
+          const qSchema = schema[queue];
+          if (qSchema) {
+            return {
+              ...result,
+              data: result.data.map((msg) => ({
+                ...msg,
+                message: qSchema.parse(msg.message as unknown),
+              })) as Message[],
+            };
+          }
+        }
+        return result;
+      }),
 
       delete: cmd("messages.delete", async (queue, id) => {
         const { error, response } = await client.DELETE(
