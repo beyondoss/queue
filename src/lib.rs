@@ -24,7 +24,13 @@ use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use sqlx::PgPool;
-use tower_http::trace::{MakeSpan, TraceLayer};
+use tower::ServiceBuilder;
+use tower_http::{
+    catch_panic::CatchPanicLayer,
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    timeout::TimeoutLayer,
+    trace::{MakeSpan, TraceLayer},
+};
 
 use config::Config;
 use error::{ApiError, DbPoolTimeout};
@@ -296,7 +302,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/metrics", get(metrics_handler))
         .route("/SimpleNotificationService.pem", get(serve_signing_cert))
         .route_layer(from_fn_with_state(state.clone(), record_metrics))
-        .layer(TraceLayer::new_for_http().make_span_with(OtelMakeSpan))
+        .layer(
+            ServiceBuilder::new()
+                .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+                .layer(PropagateRequestIdLayer::x_request_id())
+                .layer(TraceLayer::new_for_http().make_span_with(OtelMakeSpan))
+                .layer(TimeoutLayer::with_status_code(
+                    axum::http::StatusCode::REQUEST_TIMEOUT,
+                    Duration::from_secs(30),
+                ))
+                .layer(CatchPanicLayer::new()),
+        )
         .with_state(state)
 }
 
@@ -318,11 +334,11 @@ async fn record_metrics(State(state): State<AppState>, req: Request, next: Next)
     let response = next.run(req).await;
 
     state.metrics.http_connections_active.dec();
-    let status = response.status().as_u16().to_string();
+    let status = response.status().as_u16();
     state
         .metrics
         .http_requests_total
-        .with_label_values(&[method.as_str(), &path, &status])
+        .with_label_values(&[method.as_str(), &path, &status.to_string()])
         .inc();
     timer.observe(start.elapsed().as_secs_f64());
     let pool_size = state.pool.size() as usize;
@@ -336,6 +352,8 @@ async fn record_metrics(State(state): State<AppState>, req: Request, next: Next)
     if response.extensions().get::<DbPoolTimeout>().is_some() {
         state.metrics.db_pool_acquire_timeouts_total.inc();
     }
+
+    tracing::Span::current().record("http.status_code", status);
 
     response
 }
