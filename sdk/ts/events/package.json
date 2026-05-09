@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "openapi-fetch": "^0.17.0",
+    "std-env": "^3.9.0",
     "tslib": "^2.8.1"
   }
 }

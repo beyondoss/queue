@@ -1,3 +1,19 @@
+import { createQueueClient, type QueueClient } from "./client.js";
+
+let _queue: QueueClient | undefined;
+
+/**
+ * Default Queue client configured from environment variables.
+ * Reads `BEYOND_QUEUE_URL` (required) and `BEYOND_QUEUE_TOKEN` (optional, defaults to `"anon"`).
+ * Initialized lazily on first method call.
+ */
+export const queue: QueueClient = new Proxy({} as QueueClient, {
+  get(_, prop) {
+    _queue ??= createQueueClient();
+    return (_queue as unknown as Record<string | symbol, unknown>)[prop];
+  },
+});
+
 export {
   type BatchEntry,
   type BatchOptions,

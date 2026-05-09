@@ -1,4 +1,5 @@
 import createFetchClient from "openapi-fetch";
+import { env } from "std-env";
 import { QueueError } from "./errors.js";
 import type { components, paths } from "./types.js";
 import { type Camelize, camelize } from "./utils/camelize.js";
@@ -63,8 +64,11 @@ export interface QueueResponseEvent {
 }
 
 export interface QueueClientOptions {
-  /** Base URL of the beyond-queue server, e.g. `"http://localhost:9324"`. */
-  url: string;
+  /**
+   * Base URL of the beyond-queue server, e.g. `"http://localhost:9324"`.
+   * Defaults to the `BEYOND_QUEUE_URL` environment variable when omitted.
+   */
+  url?: string;
   /**
    * Bearer token for the `Authorization` header. Default: `"anon"`.
    */
@@ -186,13 +190,20 @@ function buildFetch(
 }
 
 /** Creates a queue client backed by the beyond-queue HTTP API. */
-export function createQueueClient(opts: QueueClientOptions): QueueClient {
-  const base = opts.url.replace(/\/+$/, "");
+export function createQueueClient(opts: QueueClientOptions = {}): QueueClient {
+  const url = opts.url ?? env["BEYOND_QUEUE_URL"];
+  if (!url) {
+    throw new Error(
+      "BEYOND_QUEUE_URL is required (pass `url` or set the BEYOND_QUEUE_URL env var)",
+    );
+  }
+  const base = url.replace(/\/+$/, "");
+  const token = opts.token ?? env["BEYOND_QUEUE_TOKEN"];
   const { onRequest, onResponse } = opts;
 
   const client = createFetchClient<paths>({
     baseUrl: base,
-    headers: { Authorization: `Bearer ${opts.token ?? "anon"}` },
+    headers: { Authorization: `Bearer ${token ?? "anon"}` },
     fetch: buildFetch(opts.fetch, opts.retries ?? 2, opts.timeout),
   });
 
