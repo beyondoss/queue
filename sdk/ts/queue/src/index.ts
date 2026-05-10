@@ -19,6 +19,7 @@ export {
   type BatchOptions,
   createQueueClient,
   type CreateQueueOptions,
+  type JsonValue,
   type Message,
   type Queue,
   type QueueBodyType,
