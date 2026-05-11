@@ -2,7 +2,8 @@
   "private": true,
   "workspaces": [
     "queue",
-    "events"
+    "events",
+    "cron"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
