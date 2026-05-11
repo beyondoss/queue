@@ -488,3 +488,139 @@ async fn catchup_fires_missed_occurrences() {
         "expected catchup_limit_exceeded in last_error, got: {err:?}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recurring cron — normal fire path
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn recurring_cron_fires_advances_next_fire_at() {
+    let _ = test_env();
+    let client = TestClient::new();
+    let target = unique("sched_target");
+    let name = unique("sched_cron");
+    create_queue(&client, &target).await;
+
+    let before = client
+        .post(
+            "/v1/schedules",
+            &json!({
+                "name": name,
+                "cron": "* * * * *",
+                "target": { "queue": target, "message": { "kind": "recurring" } }
+            }),
+        )
+        .await
+        .assert_status(201)
+        .json::<serde_json::Value>();
+
+    let _original_next_fire_at = before["next_fire_at"].as_str().unwrap().to_string();
+
+    // Rewind next_fire_at so the worker picks it up on the next poll.
+    let past = chrono::Utc::now() - chrono::Duration::seconds(5);
+    let pool = &test_env().pool;
+    sqlx::query("UPDATE queue.schedule SET next_fire_at = $1 WHERE name = $2")
+        .bind(past)
+        .bind(&name)
+        .execute(pool)
+        .await
+        .expect("rewind next_fire_at");
+
+    // Worker polls every 100ms; give it a few cycles.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let msg = next_message(&client, &target)
+        .await
+        .expect("message should have fired");
+    assert_eq!(msg["message"]["kind"], "recurring");
+    assert_eq!(msg["headers"]["_schedule"]["name"], name);
+    assert_eq!(msg["headers"]["_schedule"]["out_of_band"], false);
+
+    // Schedule survives (recurring), fire_count == 1, next_fire_at advanced.
+    let after = client
+        .get(&format!("/v1/schedules/{name}"))
+        .await
+        .assert_status(200)
+        .json::<serde_json::Value>();
+    assert_eq!(after["fire_count"], 1);
+    assert_eq!(after["status"], "active");
+    let new_next: chrono::DateTime<chrono::Utc> =
+        after["next_fire_at"].as_str().unwrap().parse().unwrap();
+    // The worker recomputed next_fire_at to the next cron occurrence — must be
+    // in the future, not stuck at the rewound past time.
+    assert!(
+        new_next > chrono::Utc::now(),
+        "next_fire_at {new_next} should be in the future after firing"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Topic fan-out
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn cron_schedule_fans_out_to_topic_subscribers() {
+    let _ = test_env();
+    let client = TestClient::new();
+    let q1 = unique("fan_q");
+    let q2 = unique("fan_q");
+    let name = unique("sched_fan");
+    let topic = format!("fanout.{name}");
+
+    create_queue(&client, &q1).await;
+    create_queue(&client, &q2).await;
+
+    // Subscribe both queues to the topic.
+    for q in [&q1, &q2] {
+        client
+            .post(
+                &format!("/v1/events/{topic}/subscriptions"),
+                &json!({ "queue_name": q }),
+            )
+            .await
+            .assert_status(201);
+    }
+
+    client
+        .post(
+            "/v1/schedules",
+            &json!({
+                "name": name,
+                "cron": "* * * * *",
+                "target": { "topic": topic, "message": { "kind": "fanout" } }
+            }),
+        )
+        .await
+        .assert_status(201);
+
+    // Rewind next_fire_at to make it due immediately.
+    let past = chrono::Utc::now() - chrono::Duration::seconds(5);
+    let pool = &test_env().pool;
+    sqlx::query("UPDATE queue.schedule SET next_fire_at = $1 WHERE name = $2")
+        .bind(past)
+        .bind(&name)
+        .execute(pool)
+        .await
+        .expect("rewind next_fire_at");
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // Both subscribers should have received the fanned-out message.
+    for q in [&q1, &q2] {
+        let msg = next_message(&client, q)
+            .await
+            .unwrap_or_else(|| panic!("expected message in queue {q}"));
+        assert_eq!(msg["message"]["kind"], "fanout");
+        assert_eq!(msg["headers"]["_schedule"]["name"], name);
+        assert_eq!(msg["headers"]["_schedule"]["out_of_band"], false);
+    }
+
+    // One fire event, two deliveries — fire_count is per schedule invocation.
+    let after = client
+        .get(&format!("/v1/schedules/{name}"))
+        .await
+        .assert_status(200)
+        .json::<serde_json::Value>();
+    assert_eq!(after["fire_count"], 1);
+    assert_eq!(after["status"], "active");
+}

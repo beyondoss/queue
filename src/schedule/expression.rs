@@ -85,15 +85,19 @@ impl Expression {
         .count();
         match count {
             0 => Err(ExpressionError::Empty),
-            1 => Ok(if let Some(s) = cron {
-                Expression::Cron(s.to_string())
-            } else if let Some(s) = every {
-                Expression::Every(s.to_string())
-            } else if let Some(s) = when {
-                Expression::When(s.to_string())
-            } else {
-                Expression::FireAt(fire_at.unwrap())
-            }),
+            1 => {
+                if let Some(s) = cron {
+                    Ok(Expression::Cron(s.to_string()))
+                } else if let Some(s) = every {
+                    Ok(Expression::Every(s.to_string()))
+                } else if let Some(s) = when {
+                    Ok(Expression::When(s.to_string()))
+                } else if let Some(ts) = fire_at {
+                    Ok(Expression::FireAt(ts))
+                } else {
+                    unreachable!("count == 1 but no arm matched")
+                }
+            }
             _ => Err(ExpressionError::Ambiguous),
         }
     }

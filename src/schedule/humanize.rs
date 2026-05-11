@@ -9,14 +9,24 @@
 //! than to start broad and rot. When `to_cron` fails it returns a
 //! suggestion when there's a near miss, so agents can self-correct.
 
+use tracing::debug;
+
 use super::expression::ExpressionError;
 
 /// Convert a natural-language schedule expression to a canonical cron string.
 pub fn to_cron(input: &str) -> Result<String, ExpressionError> {
     let normalized = input.trim().to_lowercase();
-    parse_phrase(&normalized).ok_or_else(|| ExpressionError::Unhumanizable {
-        input: input.to_string(),
-        suggestion: suggest(&normalized),
+    parse_phrase(&normalized).ok_or_else(|| {
+        let suggestion = suggest(&normalized);
+        debug!(
+            input,
+            suggestion = suggestion.as_deref(),
+            "schedule expression not recognized by humanizer"
+        );
+        ExpressionError::Unhumanizable {
+            input: input.to_string(),
+            suggestion,
+        }
     })
 }
 
@@ -133,21 +143,21 @@ fn parse_time(s: &str) -> Option<(u8, u8)> {
     };
     let h = match suffix {
         Some(false) => {
-            // "am"
-            if h == 12 {
-                0
-            } else if h > 12 {
+            // "am": "0am" is not a valid 12-hour time
+            if h == 0 || h > 12 {
                 return None;
+            } else if h == 12 {
+                0
             } else {
                 h
             }
         }
         Some(true) => {
-            // "pm"
-            if h == 12 {
-                12
-            } else if h > 12 {
+            // "pm": "0pm" is not a valid 12-hour time
+            if h == 0 || h > 12 {
                 return None;
+            } else if h == 12 {
+                12
             } else {
                 h + 12
             }
@@ -213,10 +223,9 @@ fn describe_every_n(cron: &str) -> Option<String> {
         [m, "*", "*", "*", "*"] if m.starts_with("*/") => {
             Some(format!("Every {} minutes", m.trim_start_matches("*/")))
         }
-        [_s, _m, "*", "*", "*", "*"] if parts[0].starts_with("*/") => Some(format!(
-            "Every {} seconds",
-            parts[0].trim_start_matches("*/")
-        )),
+        [s, _m, "*", "*", "*", "*"] if s.starts_with("*/") => {
+            Some(format!("Every {} seconds", s.trim_start_matches("*/")))
+        }
         ["0", h, "*", "*", "*"] if h.starts_with("*/") => {
             Some(format!("Every {} hours", h.trim_start_matches("*/")))
         }
@@ -235,6 +244,9 @@ fn describe_daily_at(cron: &str) -> Option<String> {
     let mon = parts[3];
     let dow = parts[4];
 
+    if h > 23 || m > 59 {
+        return None;
+    }
     let time = format!("{h:02}:{m:02}");
     match (dom, mon, dow) {
         ("*", "*", "*") => Some(format!("At {time} every day")),
@@ -247,6 +259,9 @@ fn describe_daily_at(cron: &str) -> Option<String> {
 
 fn weekday_name(dow: &str) -> Option<&'static str> {
     match dow {
+        // "7" is a non-standard alias for Sunday accepted by some cron parsers.
+        // The forward grammar always emits "0"; keep "7" here for round-trip
+        // compatibility with user-supplied cron strings, not as a new output form.
         "0" | "7" => Some("Sunday"),
         "1" => Some("Monday"),
         "2" => Some("Tuesday"),
