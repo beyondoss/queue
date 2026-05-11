@@ -194,6 +194,48 @@
         }
       }
     },
+    "/v1/previews": {
+      "post": {
+        "tags": [
+          "previews"
+        ],
+        "summary": "Preview schedule expression (dry-run, no persistence)",
+        "description": "Parses and validates a schedule expression and returns the canonical cron string, a human-readable description, and a projection of upcoming fire times. No schedule is created or modified. Use this to validate user input before calling `POST /v1/schedules` or to display a human-friendly preview in a UI.",
+        "operationId": "preview_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Preview computed successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid expression — bad cron pattern, unknown timezone, invalid interval, or unparseable natural language.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/queues": {
       "get": {
         "tags": [
@@ -720,6 +762,349 @@
           }
         }
       }
+    },
+    "/v1/schedules": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "List schedules",
+        "description": "Returns all schedules up to `SCHEDULE_LIST_MAX` (default 1000), ordered by name. Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.",
+        "operationId": "list_schedules",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status. `active` returns only firing schedules; `paused` returns only paused ones.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "active"
+          },
+          {
+            "name": "target_kind",
+            "in": "query",
+            "description": "Filter by dispatch target kind: `queue`, `topic`, or `workflow`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "queue"
+          },
+          {
+            "name": "name_prefix",
+            "in": "query",
+            "description": "Return only schedules whose name starts with this prefix.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "daily-"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Schedules.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Schedule"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Create schedule (strict — 409 if name already exists)",
+        "description": "Creates a new schedule. Returns `201 Created` with a `Location` header on success. Returns `409 Conflict` if a schedule with the same `name` already exists — use `PUT /v1/schedules/{name}` for idempotent upsert.",
+        "operationId": "create_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Schedule created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid spec — bad expression, unknown timezone, unsupported target kind.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Schedule name already exists. Use PUT to upsert.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/schedules/{name}": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Get schedule",
+        "description": "Fetches a single schedule by its name. The response includes `human_readable` and `next_fires` computed at request time.",
+        "operationId": "get_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Schedule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Schedule does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Upsert schedule (idempotent — safe to call repeatedly)",
+        "description": "Creates or replaces the schedule at `{name}`. Returns `201 Created` on first write, `200 OK` on subsequent calls with the same or different spec. On update, `fire_count` and operational state are preserved; `consecutive_failures` is cleared. Use this for config-sync workflows where the caller wants \"make it so\" semantics. For strict create-or-error, use `POST /v1/schedules`.",
+        "operationId": "upsert_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Schedule updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Schedule created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid spec — bad expression, unknown timezone, unsupported target kind.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Delete schedule (idempotent)",
+        "description": "Deletes the schedule. Returns `204 No Content` whether or not the schedule existed. Safe to call multiple times or after the schedule has already been deleted.",
+        "operationId": "delete_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (or was already absent)."
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Patch schedule (partial update or pause/resume)",
+        "description": "Applies a partial update to the schedule. Only fields present in the body are changed; omitted fields keep their current values. To pause: `{\"status\": \"paused\"}`. To resume: `{\"status\": \"active\"}`. When `status` is the only field in the request, a fast path is used that skips expression re-parsing and `next_fire_at` recomputation. Updating any expression field (`cron`, `every`, `when`, `fire_at`, or `timezone`) recomputes `next_fire_at` and resets `consecutive_failures`.",
+        "operationId": "patch_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Schedule updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid patch — bad expression, unknown timezone, unsupported target kind.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Schedule does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/schedules/{name}/runs": {
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Trigger manual run (out-of-band fire)",
+        "description": "Fires the schedule immediately, out of band. The `next_fire_at` is not changed — the normal schedule continues unaffected. `fire_count` is incremented and `last_fired_at` is updated. The produced message(s) carry `headers._schedule.out_of_band = true`. For topic targets, `msg_ids` contains one id per fanned-out subscriber queue.",
+        "operationId": "run_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Run accepted. Message(s) dispatched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Schedule does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -887,6 +1272,104 @@
           }
         }
       },
+      "Preview": {
+        "type": "object",
+        "description": "Preview returned by `POST /v1/previews` — the canonical form of a schedule\nexpression plus a projection of upcoming fire times. No schedule is created.",
+        "required": [
+          "timezone",
+          "human_readable",
+          "next_fires"
+        ],
+        "properties": {
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Canonical cron pattern derived from the expression. Absent for one-shot `fire_at` inputs."
+          },
+          "fire_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "One-shot fire timestamp. Present only when the input was `fire_at`."
+          },
+          "human_readable": {
+            "type": "string",
+            "description": "Human-readable description of the schedule expression."
+          },
+          "next_fires": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Projected next N fire times in UTC."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone used for projection (defaults to `\"UTC\"`)."
+          }
+        },
+        "example": {
+          "cron": "0 9 * * 1-5",
+          "human_readable": "At 09:00, Monday through Friday, America/New_York",
+          "next_fires": [
+            "2026-05-11T13:00:00Z",
+            "2026-05-12T13:00:00Z",
+            "2026-05-13T13:00:00Z"
+          ],
+          "timezone": "America/New_York"
+        }
+      },
+      "PreviewSpec": {
+        "type": "object",
+        "description": "Input for a dry-run preview. Provide exactly one of `cron`, `every`,\n`when`, or `fire_at`. No schedule is created or modified.",
+        "properties": {
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw 5- or 6-field cron pattern. Mutually exclusive with `every`, `when`, `fire_at`."
+          },
+          "every": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fixed-interval shorthand, e.g. `\"5m\"`. Mutually exclusive."
+          },
+          "fire_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "One-shot ISO-8601 timestamp. Mutually exclusive."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "IANA timezone for cron evaluation. Defaults to `\"UTC\"`."
+          },
+          "when": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Natural-language expression, e.g. `\"every weekday at 9am\"`. Mutually exclusive."
+          }
+        },
+        "example": {
+          "timezone": "America/New_York",
+          "when": "every weekday at 9am"
+        }
+      },
       "PurgeResponse": {
         "type": "object",
         "description": "Result of a purge operation.",
@@ -975,6 +1458,399 @@
             "type": "string",
             "description": "Queue name."
           }
+        }
+      },
+      "RunResult": {
+        "type": "object",
+        "description": "Result of a manual `POST /v1/schedules/{name}/runs`.\nFor queue targets `msg_ids` is a singleton; for topic targets it contains\none id per fanned-out subscriber queue.",
+        "required": [
+          "schedule_name",
+          "fired_at",
+          "scheduled_for",
+          "out_of_band",
+          "msg_ids"
+        ],
+        "properties": {
+          "fired_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp when the run was dispatched."
+          },
+          "msg_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Message IDs produced. Singleton for queue targets; one per subscriber for topic targets."
+          },
+          "out_of_band": {
+            "type": "boolean",
+            "description": "`true` for manual runs; `false` for worker-scheduled fires."
+          },
+          "schedule_name": {
+            "type": "string",
+            "description": "Name of the schedule that was run."
+          },
+          "scheduled_for": {
+            "type": "string",
+            "format": "date-time",
+            "description": "`fired_at` for manual runs; the due `next_fire_at` for scheduled runs."
+          }
+        },
+        "example": {
+          "fired_at": "2026-05-10T14:23:00Z",
+          "msg_ids": [
+            42
+          ],
+          "out_of_band": true,
+          "schedule_name": "daily-report",
+          "scheduled_for": "2026-05-10T14:23:00Z"
+        }
+      },
+      "Schedule": {
+        "type": "object",
+        "description": "A stored schedule, including derived `human_readable` description and\n`next_fires` projection computed at response time.",
+        "required": [
+          "name",
+          "expression",
+          "timezone",
+          "jitter_secs",
+          "catchup",
+          "catchup_limit",
+          "failure_threshold",
+          "target",
+          "status",
+          "next_fire_at",
+          "consecutive_failures",
+          "fire_count",
+          "human_readable",
+          "next_fires",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "catchup": {
+            "type": "boolean",
+            "description": "Whether missed fires are backfilled on worker restart."
+          },
+          "catchup_limit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum backfill count per catchup pass."
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of consecutive failures since the last successful fire."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Canonical cron pattern stored in the database. Present for recurring schedules; absent for one-shots."
+          },
+          "expression": {
+            "type": "string",
+            "description": "Original user-supplied expression string (cron pattern, interval, natural language, or ISO timestamp)."
+          },
+          "failure_threshold": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Consecutive-failure threshold before auto-pause."
+          },
+          "fire_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "One-shot fire timestamp. Present only for `fire_at` schedules; absent for recurring ones."
+          },
+          "fire_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total number of times this schedule has fired (scheduled + manual)."
+          },
+          "human_readable": {
+            "type": "string",
+            "description": "Human-readable summary of the schedule expression, e.g. `\"At 09:00, Monday through Friday\"`."
+          },
+          "jitter_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Random jitter in seconds applied to each fire time."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Error message from the most recent failed dispatch. Cleared on success."
+          },
+          "last_fired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Timestamp of the most recent fire (scheduled or manual). Absent if never fired."
+          },
+          "name": {
+            "type": "string",
+            "description": "Schedule name — the natural key."
+          },
+          "next_fire_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Next scheduled fire time."
+          },
+          "next_fires": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Projected next N fire times (UTC). Count is controlled by `SCHEDULE_PREVIEW_COUNT`."
+          },
+          "status": {
+            "type": "string",
+            "description": "Current status: `\"active\"` or `\"paused\"`."
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetSpec",
+            "description": "Dispatch target."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone used for cron evaluation."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "example": {
+          "catchup": false,
+          "catchup_limit": 100,
+          "consecutive_failures": 0,
+          "created_at": "2026-05-01T00:00:00Z",
+          "cron": "0 9 * * 1-5",
+          "expression": "every weekday at 9am",
+          "failure_threshold": 3,
+          "fire_count": 42,
+          "human_readable": "At 09:00, Monday through Friday, America/New_York",
+          "jitter_secs": 0,
+          "name": "daily-report",
+          "next_fire_at": "2026-05-12T13:00:00Z",
+          "next_fires": [
+            "2026-05-12T13:00:00Z",
+            "2026-05-13T13:00:00Z"
+          ],
+          "status": "active",
+          "target": {
+            "message": {
+              "type": "daily_summary"
+            },
+            "queue": "reports"
+          },
+          "timezone": "America/New_York",
+          "updated_at": "2026-05-01T00:00:00Z"
+        }
+      },
+      "SchedulePatch": {
+        "type": "object",
+        "description": "Partial spec for PATCH. All fields are optional; present fields replace the\nexisting value. Omitted fields are preserved. If any of `cron`, `every`,\n`when`, or `fire_at` is provided, all four are replaced (they are mutually\nexclusive).\n\nTo pause or resume a schedule, send `{\"status\": \"paused\"}` or\n`{\"status\": \"active\"}` as the only field.",
+        "properties": {
+          "catchup": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Enable or disable catchup for missed fires."
+          },
+          "catchup_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Replacement catchup backfill limit."
+          },
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replacement cron pattern. Mutually exclusive with `every`, `when`, `fire_at`."
+          },
+          "every": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replacement interval shorthand, e.g. `\"10m\"`. Mutually exclusive."
+          },
+          "failure_threshold": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Replacement consecutive-failure threshold before auto-pause."
+          },
+          "fire_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Replacement one-shot timestamp (must be in the future). Mutually exclusive."
+          },
+          "jitter_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Replacement jitter in seconds."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set to `\"active\"` to resume or `\"paused\"` to pause. When this is the\nonly field in the request, it takes an optimized fast path."
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TargetSpec",
+                "description": "Replacement dispatch target."
+              }
+            ]
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replacement IANA timezone name for cron evaluation."
+          },
+          "when": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replacement natural-language expression. Mutually exclusive."
+          }
+        },
+        "example": {
+          "status": "paused"
+        }
+      },
+      "ScheduleSpec": {
+        "type": "object",
+        "description": "Full schedule spec for create / upsert.",
+        "required": [
+          "name",
+          "target"
+        ],
+        "properties": {
+          "catchup": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "If `true`, fire missed occurrences when the worker restarts after downtime (bounded by `catchup_limit`). Defaults to `false`."
+          },
+          "catchup_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Maximum number of missed fires to backfill in a single catchup pass. Defaults to `100`."
+          },
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw 5- or 6-field cron pattern, e.g. `\"0 9 * * 1-5\"`. Mutually exclusive with `every`, `when`, `fire_at`."
+          },
+          "every": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fixed-interval shorthand: `\"5m\"`, `\"30s\"`, `\"2h\"`. Must evenly divide the next-larger unit. Mutually exclusive."
+          },
+          "failure_threshold": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Number of consecutive dispatch failures before the schedule is auto-paused. Defaults to `3`."
+          },
+          "fire_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 one-shot fire timestamp. Must be in the future. The schedule row is deleted after firing. Mutually exclusive."
+          },
+          "jitter_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Random jitter in seconds added to each computed fire time to spread bursts. Defaults to `0`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Schedule name — 1–64 characters, `[a-z0-9_-]`. Used as the natural key for GET/PUT/PATCH/DELETE."
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetSpec",
+            "description": "Dispatch target. Provide exactly one of the `queue`, `topic`, or `workflow` shapes."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "IANA timezone name for cron evaluation, e.g. `\"America/New_York\"`. Defaults to `\"UTC\"`. Ignored for `fire_at`."
+          },
+          "when": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Natural-language expression, e.g. `\"every weekday at 9am\"`. Converted to cron internally. Mutually exclusive."
+          }
+        },
+        "example": {
+          "name": "daily-report",
+          "target": {
+            "message": {
+              "type": "daily_summary"
+            },
+            "queue": "reports"
+          },
+          "timezone": "America/New_York",
+          "when": "every weekday at 9am"
         }
       },
       "SendBody": {
@@ -1095,6 +1971,89 @@
             "description": "Name of an existing queue to deliver matching messages to. Mutually exclusive\nwith `protocol` and `endpoint`."
           }
         }
+      },
+      "TargetSpec": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "QueueTarget",
+            "description": "Send a message to a named queue.",
+            "required": [
+              "queue",
+              "message"
+            ],
+            "properties": {
+              "headers": {
+                "description": "User-defined headers merged into the message. Must not contain the reserved key `_schedule`."
+              },
+              "message": {
+                "description": "Message payload (any JSON value)."
+              },
+              "queue": {
+                "type": "string",
+                "description": "Name of the target queue."
+              }
+            },
+            "example": {
+              "message": {
+                "key": "value"
+              },
+              "queue": "my-queue"
+            }
+          },
+          {
+            "type": "object",
+            "title": "TopicTarget",
+            "description": "Fan a message out to all queues subscribed to this routing key.",
+            "required": [
+              "topic",
+              "message"
+            ],
+            "properties": {
+              "headers": {
+                "description": "User-defined headers merged into each fanned-out message. Must not contain `_schedule`."
+              },
+              "message": {
+                "description": "Message payload (any JSON value)."
+              },
+              "topic": {
+                "type": "string",
+                "description": "Routing key used for event fan-out (topic name)."
+              }
+            },
+            "example": {
+              "message": {
+                "order_id": 42
+              },
+              "topic": "events.order.created"
+            }
+          },
+          {
+            "type": "object",
+            "title": "WorkflowTarget",
+            "description": "Dispatch to a named workflow (reserved — currently rejected with `400`).",
+            "required": [
+              "workflow",
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "description": "Input payload passed to the workflow on start."
+              },
+              "workflow": {
+                "type": "string",
+                "description": "Workflow identifier. Not yet supported."
+              }
+            },
+            "example": {
+              "input": {
+                "order_id": 42
+              },
+              "workflow": "order-fulfillment"
+            }
+          }
+        ],
+        "description": "Dispatch target — provide exactly one of the three shapes. The presence of\n`queue`, `topic`, or `workflow` determines which kind is used.\n\n**Queue** — sends a single message to a named queue:\n```json\n{ \"queue\": \"my-queue\", \"message\": { \"key\": \"value\" } }\n```\n\n**Topic** — fans the message out to every subscribed queue via a routing key:\n```json\n{ \"topic\": \"events.order.created\", \"message\": { \"order_id\": 42 } }\n```\n\n**Workflow** — reserved; currently rejected with `400`. Will dispatch to a\nnamed workflow when the workflow runtime ships."
       },
       "TopicMessage": {
         "type": "object",
@@ -1219,6 +2178,14 @@
     {
       "name": "events",
       "description": "Event fan-out and subscriptions"
+    },
+    {
+      "name": "schedules",
+      "description": "Time-based triggers (cron, every, when, fireAt)"
+    },
+    {
+      "name": "previews",
+      "description": "Dry-run schedule expressions"
     }
   ]
 }

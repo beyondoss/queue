@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT msg_id AS \"msg_id!\"\n                   FROM queue.publish_event($1, $2::jsonb, $3::jsonb, 0::integer)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "msg_id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c43f69fce9b758b9043c2281a6116645d1b33f8bb6b46f00de127fe071ae09e4"
+}

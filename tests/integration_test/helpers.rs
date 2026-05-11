@@ -177,6 +177,17 @@ impl TestClient {
         .await
     }
 
+    pub async fn put<B: serde::Serialize>(&self, path: &str, body: &B) -> TestResponse {
+        TestResponse::from(
+            self.req(reqwest::Method::PUT, path)
+                .json(body)
+                .send()
+                .await
+                .expect("PUT"),
+        )
+        .await
+    }
+
     /// Send a request using the SQS JSON wire protocol.
     pub async fn sqs<B: serde::Serialize>(&self, action: &str, body: &B) -> TestResponse {
         TestResponse::from(

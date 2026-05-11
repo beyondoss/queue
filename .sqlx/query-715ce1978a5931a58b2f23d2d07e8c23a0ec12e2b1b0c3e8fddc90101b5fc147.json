@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE queue.schedule\n        SET consecutive_failures = consecutive_failures + 1,\n            last_error           = $2,\n            status               = CASE\n                WHEN consecutive_failures + 1 >= $3 THEN 'paused'::queue.schedule_status\n                ELSE status\n            END,\n            updated_at           = now()\n        WHERE name = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "715ce1978a5931a58b2f23d2d07e8c23a0ec12e2b1b0c3e8fddc90101b5fc147"
+}

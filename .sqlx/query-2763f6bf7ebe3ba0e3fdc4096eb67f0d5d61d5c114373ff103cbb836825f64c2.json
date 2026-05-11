@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO queue.schedule (\n            name, expression, cron, fire_at, timezone, jitter_secs,\n            catchup, catchup_limit, failure_threshold,\n            target_kind, target_name, payload, headers, next_fire_at\n        )\n        VALUES (\n            $1, $2, $3, $4, $5, $6, $7, $8, $9,\n            $10::queue.schedule_target_kind, $11, $12::jsonb, $13::jsonb, $14\n        )\n        ON CONFLICT (name) DO NOTHING\n        RETURNING schedule_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schedule_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Int4",
+        "Bool",
+        "Int4",
+        "Int4",
+        {
+          "Custom": {
+            "name": "queue.schedule_target_kind",
+            "kind": {
+              "Enum": [
+                "queue",
+                "topic",
+                "workflow"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2763f6bf7ebe3ba0e3fdc4096eb67f0d5d61d5c114373ff103cbb836825f64c2"
+}

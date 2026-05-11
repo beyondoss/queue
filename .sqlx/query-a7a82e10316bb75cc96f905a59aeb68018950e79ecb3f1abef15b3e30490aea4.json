@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT queue.send($1, $2::jsonb, $3::jsonb, clock_timestamp(), true) AS \"msg_id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "msg_id!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a7a82e10316bb75cc96f905a59aeb68018950e79ecb3f1abef15b3e30490aea4"
+}

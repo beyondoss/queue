@@ -1,0 +1,49 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE queue.schedule SET\n            expression           = $2,\n            cron                 = $3,\n            fire_at              = $4,\n            timezone             = $5,\n            jitter_secs          = $6,\n            catchup              = $7,\n            catchup_limit        = $8,\n            failure_threshold    = $9,\n            target_kind          = $10::queue.schedule_target_kind,\n            target_name          = $11,\n            payload              = $12::jsonb,\n            headers              = $13::jsonb,\n            status               = $14::queue.schedule_status,\n            next_fire_at         = $15,\n            consecutive_failures = 0,\n            last_error           = NULL,\n            updated_at           = now()\n        WHERE name = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Int4",
+        "Bool",
+        "Int4",
+        "Int4",
+        {
+          "Custom": {
+            "name": "queue.schedule_target_kind",
+            "kind": {
+              "Enum": [
+                "queue",
+                "topic",
+                "workflow"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        {
+          "Custom": {
+            "name": "queue.schedule_status",
+            "kind": {
+              "Enum": [
+                "active",
+                "paused"
+              ]
+            }
+          }
+        },
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "777e371d0c9b1245628782515e4d28ee8d9a81e1766945a2b1f27ee148e8e371"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE queue.schedule\n                SET next_fire_at         = $2,\n                    last_fired_at        = $3,\n                    fire_count           = fire_count + $4,\n                    consecutive_failures = 0,\n                    last_error           = $5,\n                    updated_at           = now()\n                WHERE name = $1\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec3e3feaf0533d01eb58321e4e6d668b388b8b2b3c788f3a42971462986c0e85"
+}

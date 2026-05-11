@@ -6,6 +6,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod ops;
 pub mod routes;
+pub mod schedule;
 pub mod signing;
 pub mod sns;
 pub mod sqs;
@@ -124,6 +125,20 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         None
     };
 
+    let schedule_handle = if config.schedule_enabled {
+        tracing::info!("schedule worker enabled");
+        Some(ops::schedule_worker::start(
+            pool.clone(),
+            ops::schedule_worker::ScheduleWorkerConfig {
+                poll_interval_ms: config.schedule_poll_ms,
+                batch_size: config.schedule_batch_size,
+            },
+            metrics.clone(),
+        ))
+    } else {
+        None
+    };
+
     let scrape_handle = start_queue_depth_scrape(pool.clone(), metrics.clone());
 
     let signer = Arc::new(Signer::generate()?);
@@ -153,6 +168,13 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     // Delivery: abort the task (lease-based design makes this abort-safe —
     // any mid-flight rows resurface after their lease expires).
     if let Some(h) = delivery_handle {
+        h.abort();
+        let _ = h.await;
+    }
+
+    // Schedule worker: abort is safe — the outer transaction either committed
+    // (all advances persisted) or aborted (next iteration re-claims the rows).
+    if let Some(h) = schedule_handle {
         h.abort();
         let _ = h.await;
     }

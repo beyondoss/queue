@@ -1,0 +1,142 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            name,\n            expression,\n            cron,\n            fire_at,\n            timezone,\n            jitter_secs,\n            catchup,\n            catchup_limit,\n            failure_threshold,\n            target_kind::TEXT AS \"target_kind!\",\n            target_name,\n            payload,\n            headers,\n            status::TEXT AS \"status!\",\n            next_fire_at,\n            last_fired_at,\n            last_error,\n            consecutive_failures,\n            fire_count,\n            created_at,\n            updated_at\n        FROM queue.schedule\n        WHERE status = 'active' AND next_fire_at <= now()\n        ORDER BY next_fire_at\n        LIMIT $1\n        FOR UPDATE SKIP LOCKED\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "expression",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "cron",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "fire_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "timezone",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "jitter_secs",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "catchup",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "catchup_limit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "failure_threshold",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "target_kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "target_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "payload",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 12,
+        "name": "headers",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 13,
+        "name": "status!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "next_fire_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "last_fired_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "last_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "consecutive_failures",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 18,
+        "name": "fire_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 19,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 20,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      true,
+      null,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ffb5f45a5e2e6fd15306c0bdcd6ad0eedc3372f6385b3952335cb23767bdb372"
+}

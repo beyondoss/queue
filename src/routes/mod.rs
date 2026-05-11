@@ -1,6 +1,8 @@
 pub mod events;
 pub mod messages;
+pub mod previews;
 pub mod queues;
+pub mod schedules;
 
 use axum::Router;
 use axum::extract::State;
@@ -33,6 +35,14 @@ use crate::AppState;
         events::subscribe_queue,
         events::unsubscribe_queue,
         events::list_subscriptions,
+        schedules::create_schedule,
+        schedules::list_schedules,
+        schedules::get_schedule,
+        schedules::upsert_schedule,
+        schedules::patch_schedule,
+        schedules::delete_schedule,
+        schedules::run_schedule,
+        previews::create_preview,
     ),
     components(schemas(
         crate::error::ErrorBody,
@@ -54,11 +64,20 @@ use crate::AppState;
         events::SubscribeRequest,
         crate::ops::event::TopicMessage,
         crate::ops::event::TopicSubscription,
+        crate::ops::schedule::ScheduleSpec,
+        crate::ops::schedule::SchedulePatch,
+        crate::ops::schedule::TargetSpec,
+        crate::ops::schedule::Schedule,
+        crate::ops::schedule::RunResult,
+        crate::ops::schedule::Preview,
+        crate::ops::schedule::PreviewSpec,
     )),
     tags(
         (name = "queues", description = "Queue lifecycle and metrics"),
         (name = "messages", description = "Send, receive, delete, and visibility"),
         (name = "events", description = "Event fan-out and subscriptions"),
+        (name = "schedules", description = "Time-based triggers (cron, every, when, fireAt)"),
+        (name = "previews", description = "Dry-run schedule expressions"),
     )
 )]
 pub struct ApiDoc;
@@ -98,6 +117,19 @@ pub fn router() -> Router<AppState> {
             "/events/{pattern}/subscriptions/{id}",
             delete(events::unsubscribe_queue),
         )
+        .route(
+            "/schedules",
+            post(schedules::create_schedule).get(schedules::list_schedules),
+        )
+        .route(
+            "/schedules/{name}",
+            get(schedules::get_schedule)
+                .put(schedules::upsert_schedule)
+                .patch(schedules::patch_schedule)
+                .delete(schedules::delete_schedule),
+        )
+        .route("/schedules/{name}/runs", post(schedules::run_schedule))
+        .route("/previews", post(previews::create_preview))
 }
 
 async fn serve_cert(State(state): State<AppState>) -> impl IntoResponse {

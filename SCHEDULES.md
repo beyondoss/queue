@@ -3,10 +3,10 @@
 Time-based triggers for the Beyond platform. A small layer over the existing
 queue: a schedule is a row that names _what_ to send and _when_ to send it.
 A worker advances rows past their `next_fire_at`, fans into the same
-`queue.send` / `queue.send_topic` / workflow-start paths everything else
+`queue.send` / `queue.publish_event` / workflow-start paths everything else
 already uses. One new table, zero new pgrx functions, one new SDK verb.
 
-> **Status:** design proposal. Not yet built.
+> **Status:** in progress. Tracked in [plans/clearly-i-want-a-soft-pascal.md](~/.claude/plans/clearly-i-want-a-soft-pascal.md).
 
 ---
 
@@ -15,7 +15,7 @@ already uses. One new table, zero new pgrx functions, one new SDK verb.
 - Recurring and one-shot triggers that fire on time, survive crashes, and
   fork with the rest of the substrate.
 - **Composes with the existing queue.** A schedule is just a producer with
-  a clock attached. It calls `queue.send`, `queue.send_topic`, or starts a
+  a clock attached. It calls `queue.send`, `queue.publish_event`, or starts a
   workflow run — same paths everything else uses.
 - **Human-friendly _and_ machine-friendly.** Accept raw cron, fixed
   intervals, and natural language; canonicalize on the server; round-trip
@@ -23,8 +23,9 @@ already uses. One new table, zero new pgrx functions, one new SDK verb.
   built.
 - **Forks with the rest of the platform.** Schedules live in user
   Postgres, on the user's GlideFS volume.
-- **Zero idle cost.** The scheduler worker runs only when schedules exist.
-  No schedules, no loop, no overhead.
+- **Trivial idle cost.** The scheduler worker is always on but polls a
+  partial index `WHERE status = 'active'`; an empty schedule table costs
+  one sub-millisecond index probe per poll cycle.
 - The minimum effective surface. One table, one worker, three expression
   forms, three target kinds.
 
@@ -62,7 +63,7 @@ database. Users don't pay for it any more than they pay for Postgres being up.
 
 Function VMs — user code — sleep when idle. When a schedule fires, the
 scheduler worker (running in the queue server) calls `queue.send` or
-`queue.send_topic`. The fan-out sends HTTP to the function VM's endpoint.
+`queue.publish_event`. The fan-out sends HTTP to the function VM's endpoint.
 The gateway sees a sleeping VM, wakes it, delivers the request. The function
 processes it and goes back to sleep.
 
@@ -72,13 +73,17 @@ machinery — the same path any other inbound request takes.
 
 ### Worker lifecycle
 
-The scheduler worker does not start at queue server boot. It starts when the
-first schedule is created and stops when the last schedule is deleted. A queue
-with no schedules has zero scheduler overhead.
+The scheduler worker starts at queue server boot and runs for the lifetime
+of the process. Its idle cost is one partial-index probe per poll cycle —
+sub-millisecond on an empty `schedule_due_idx` — so chasing "zero overhead"
+by stopping the worker when no schedules exist would add intra-process
+signaling complexity without measurable benefit. Same pattern as the HTTP
+delivery worker.
 
-On startup (or when the first schedule is created), the worker immediately
-checks for any fires missed while it was not running — the same catchup logic
-that handles outages — before entering the normal poll loop.
+On boot, the worker runs one catchup pass (firing any missed occurrences
+for active schedules subject to each schedule's `catchup` and
+`catchup_limit` settings) before entering the normal poll loop. This
+covers fires missed while the queue server was down.
 
 ---
 
@@ -89,7 +94,7 @@ Schedules are not a parallel system. They reuse queue primitives directly.
 | Schedule concept                | Queue primitive                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------- |
 | Fire a schedule into a queue    | `queue.send` with the schedule's stored payload                              |
-| Fire a schedule into a topic    | `queue.send_topic` (existing fan-out, including HTTP/SNS subscribers)        |
+| Fire a schedule into a topic    | `queue.publish_event` (existing fan-out, including HTTP/SNS subscribers)     |
 | Fire a schedule into a workflow | The same workflow-start path topic subscriptions use                         |
 | One-shot schedule               | A row whose advance step deletes it instead of computing a next fire         |
 | Wake a sleeping function VM     | Existing HTTP fan-out delivers to the endpoint; gateway wakes the VM         |
@@ -149,7 +154,7 @@ config they just wrote:
 }
 ```
 
-The `:preview` endpoint runs the full parse and projection without writing
+The `/preview` endpoint runs the full parse and projection without writing
 anything, so callers can dry-run an expression and see exactly what would
 fire before committing it. This is the single biggest agent-affordance in
 the design — most schedule mistakes are misread cron expressions, and a
@@ -228,6 +233,9 @@ One new table in the `queue` schema.
 ```sql
 CREATE TYPE queue.schedule_status AS ENUM ('active', 'paused');
 
+-- 'workflow' is reserved from day 1; the API rejects it with 400 until
+-- the workflow runtime exists, but it is present in the enum so adding
+-- workflow support later requires no schema migration.
 CREATE TYPE queue.schedule_target_kind AS ENUM ('queue', 'topic', 'workflow');
 
 CREATE TABLE queue.schedule (
@@ -240,16 +248,16 @@ CREATE TABLE queue.schedule (
     jitter_secs           INT  NOT NULL DEFAULT 0,
     catchup               BOOLEAN NOT NULL DEFAULT false,
     catchup_limit         INT  NOT NULL DEFAULT 100,
+    failure_threshold     INT  NOT NULL DEFAULT 3,
 
     target_kind           queue.schedule_target_kind NOT NULL,
     target_name           TEXT NOT NULL,                         -- queue name | routing key | workflow name
     payload               JSONB,                                 -- message body or workflow input
-    headers               JSONB,                                 -- forwarded to queue.send
+    headers               JSONB,                                 -- forwarded to queue.send / queue.publish_event
 
     status                queue.schedule_status NOT NULL DEFAULT 'active',
     next_fire_at          TIMESTAMP WITH TIME ZONE NOT NULL,
     last_fired_at         TIMESTAMP WITH TIME ZONE,
-    last_msg_id           BIGINT,                                -- for observability
     last_error            TEXT,
     consecutive_failures  INT NOT NULL DEFAULT 0,
     fire_count            BIGINT NOT NULL DEFAULT 0,
@@ -265,10 +273,22 @@ CREATE INDEX schedule_due_idx
     WHERE status = 'active';
 ```
 
-No fire log table — the queue messages themselves are the log, with
-`last_msg_id` pointing at the most recent. For audit history, schedule
-fires that target a queue land in that queue's archive table the same way
-any other message does.
+No fire log table and no `last_msg_id` pointer — the queue messages themselves
+are the log. Every fire tags the produced message(s) with a `_schedule` header
+(see [Header convention](#header-convention) below), so the audit trail is a
+direct query against the target queue's archive:
+
+```sql
+SELECT msg_id, enqueued_at, message
+FROM queue.a_{target_name}
+WHERE headers->'_schedule'->>'name' = 'daily-report'
+  AND enqueued_at > now() - interval '1 day'
+ORDER BY enqueued_at DESC;
+```
+
+This works identically for queue and topic targets — and generalizes to
+workflow runs once those exist. The schedule row owns _when_ it fired
+(`fire_count`, `last_fired_at`); the archive owns _what landed where_.
 
 ---
 
@@ -316,23 +336,31 @@ FROM queue.schedule s
 JOIN due USING (schedule_id);
 ```
 
-For each claimed row, in the same transaction:
+For each claimed row, in a `SAVEPOINT` inside the outer transaction:
 
-1. Dispatch by `target_kind`:
-   - `queue` → `SELECT queue.send($name, $payload, $headers, 0)`
-   - `topic` → `SELECT queue.send_topic($routing_key, $payload, $headers, 0)`
-   - `workflow` → call the workflow-start SQL the workflows runtime exposes
-2. Compute `next_fire_at`:
+1. Build effective headers by merging the user-supplied `headers` with
+   `{_schedule: {name, scheduled_for, out_of_band: false}}`.
+2. Dispatch by `target_kind`:
+   - `queue` → `SELECT queue.send($name, $payload, $effective_headers, 0)`
+   - `topic` → `SELECT queue.publish_event($routing_key, $payload, $effective_headers, 0)`
+   - `workflow` → unreachable; the API rejects this target kind until the
+     workflow runtime exists.
+3. Compute `next_fire_at`:
    - `cron IS NOT NULL`: parse cron, advance to the next occurrence after
-     `now` (or after the previous `next_fire_at` if `catchup`).
+     `now`. If `catchup` is true, fire each missed occurrence in order up to
+     `catchup_limit`, tagging `scheduled_for` distinctly for each.
    - `fire_at IS NOT NULL`: this was a one-shot — `DELETE` the row.
-3. `UPDATE queue.schedule SET next_fire_at = ..., last_fired_at = now(),
-   last_msg_id = ..., fire_count = fire_count + 1,
-   consecutive_failures = 0, last_error = NULL`.
+4. `UPDATE queue.schedule SET next_fire_at = ..., last_fired_at = now(),
+   fire_count = fire_count + 1, consecutive_failures = 0, last_error = NULL`.
+5. `RELEASE SAVEPOINT`.
 
-If dispatch fails, the transaction aborts. The worker retries with
-`consecutive_failures` incremented and `last_error` set. At three
-consecutive failures the schedule is paused.
+If dispatch for an individual schedule fails, the worker `ROLLBACK`s only
+that schedule's savepoint, increments `consecutive_failures`, sets
+`last_error`, and (when `consecutive_failures >= failure_threshold`) sets
+`status = 'paused'`. Other schedules in the same claim batch are
+unaffected. The whole batch commits in one outer transaction; the
+XactCallback registered by each `queue.send` / `queue.publish_event` fires
+on that commit and wakes any waiting receivers.
 
 The next sleep target is `MIN(next_fire_at) WHERE status = 'active'`. If
 `min` is in the past or within the poll budget, the worker loops
@@ -360,31 +388,49 @@ design accepts second-level precision and does not chase finer.
 ### Native REST (`/v1/`)
 
 ```
-POST    /v1/schedules                          Create or upsert. Body: schedule spec. 201.
-GET     /v1/schedules                          List. Query: ?status=active&target=queue
-GET     /v1/schedules/{name}                   Get one. Includes next_fires preview.
-PUT     /v1/schedules/{name}                   Idempotent upsert by name.
+POST    /v1/schedules                          Strict create. 201 + Location, or 409 if name taken.
+GET     /v1/schedules                          List. Query: ?status=active&target=queue. Hard limit 1000.
+GET     /v1/schedules/{name}                   Get one. Includes human_readable + next_fires preview.
+PUT     /v1/schedules/{name}                   Idempotent upsert. 201 if new, 200 if updated.
 PATCH   /v1/schedules/{name}                   Partial update (status, payload, expression).
-DELETE  /v1/schedules/{name}                   Remove. 204.
-POST    /v1/schedules/{name}/run               Fire now (out-of-band). 200 with msg_id.
-POST    /v1/schedules:preview                  Dry-run: parse expression, return cron + next_fires.
+DELETE  /v1/schedules/{name}                   Remove. 204. Idempotent.
+POST    /v1/schedules/{name}/runs              Manual run. 202 with Run resource.
+
+POST    /v1/previews                           Dry-run any expression. 200 with cron + human_readable + next_fires.
 ```
 
-Pause and resume are `PATCH /v1/schedules/{name}` with `{ "status": "paused" }` or
-`{ "status": "active" }`. No dedicated sub-routes.
+**POST vs PUT.** POST and PUT mean different things and the response codes
+say so:
 
-The collection is plural, the verbs are HTTP methods, sub-actions
-(`pause`, `resume`, `run`) are nested resources rather than `?action=`
-tunneling — same conventions as the existing native API.
+- `POST /v1/schedules` is **strict create**. The body must contain `name`.
+  Returns 201 on success or **409 Conflict** if the name is already taken.
+  Use this when you believe you're creating a new schedule and want to know
+  if your view of the world was stale.
+- `PUT /v1/schedules/{name}` is **idempotent upsert**. Returns 201 on
+  create, 200 on update. Use this when you're declaring desired state and
+  don't care whether the schedule existed before — agents regenerating an
+  infrastructure config `PUT` their desired set every deploy.
 
-`PUT /v1/schedules/{name}` is the agent-friendly entry point: idempotent,
-keyed by a name the caller chooses, full body. An agent regenerating an
-infrastructure config `PUT`s its desired set and never duplicates.
+Each method answers a different question; conflating them throws away that
+information. PATCH stays as the partial-update verb.
 
-`POST /v1/schedules/{name}/run` fires the schedule immediately, out of
-band. It does not advance `next_fire_at`, but it does update
-`last_fired_at`, `last_msg_id`, and `fire_count` — a manual run is still
-a fire for observability purposes.
+**Pause and resume** are `PATCH /v1/schedules/{name}` with
+`{ "status": "paused" }` or `{ "status": "active" }`. No dedicated sub-routes.
+
+**Manual runs** (`POST /v1/schedules/{name}/runs`) return a Run resource and do
+not advance `next_fire_at`. They do bump `last_fired_at` and `fire_count` —
+a manual run is still a fire. The produced message(s) carry
+`headers._schedule.out_of_band = true` so consumers can distinguish them
+from scheduled fires. The URI is plural and noun-shaped so a future
+`GET /v1/schedules/{name}/runs` (list recent runs by joining
+`headers._schedule.name` against the target archive) slots in cleanly.
+
+**Previews are a top-level resource** (`POST /v1/previews`), not a
+sub-route of `/schedules`. A preview is not a sub-resource of a specific
+schedule — it doesn't read or write a schedule row, and `"preview"` is a
+valid schedule name, so nesting would overload the URI. Top-level
+placement also lets the preview endpoint extend to other time-based
+expressions later without belonging to one collection.
 
 ### Schedule object
 
@@ -397,6 +443,7 @@ a fire for observability purposes.
   "jitter_secs": 0,
   "catchup": false,
   "catchup_limit": 100,
+  "failure_threshold": 3,
   "target": {
     "queue": "reports",
     "message": { "kind": "daily" },
@@ -405,7 +452,6 @@ a fire for observability purposes.
   "status": "active",
   "next_fire_at": "2026-05-08T13:00:00Z",
   "last_fired_at": "2026-05-07T13:00:00Z",
-  "last_msg_id": 1842,
   "consecutive_failures": 0,
   "fire_count": 37,
   "human_readable": "At 09:00, Monday through Friday, America/New_York",
@@ -421,10 +467,27 @@ a fire for observability purposes.
 }
 ```
 
+### Run object
+
+`POST /v1/schedules/{name}/runs` returns a Run:
+
+```json
+{
+  "schedule_name": "daily-report",
+  "fired_at": "2026-05-10T14:23:00Z",
+  "scheduled_for": "2026-05-10T14:23:00Z",
+  "out_of_band": true,
+  "msg_ids": [1843]
+}
+```
+
+For topic targets, `msg_ids` is the list of identifiers produced by the
+fan-out (one per fanned-out queue). For queue targets, it is a singleton.
+
 ### Preview
 
 ```http
-POST /v1/schedules:preview
+POST /v1/previews
 {
   "expression":    "every weekday at 9am",
   "timezone":      "America/New_York",
@@ -442,6 +505,34 @@ POST /v1/schedules:preview
 If parsing fails, the error response carries the parse position and a
 short suggestion list (`Did you mean: "every weekday at 9:00am"?`) so an
 agent can self-correct without a round trip to docs.
+
+### Header convention
+
+Every fire (scheduled, catchup, or out-of-band manual run) merges a
+`_schedule` object into the produced message's `headers`:
+
+```json
+{
+  "_schedule": {
+    "name": "daily-report",
+    "scheduled_for": "2026-05-10T09:00:00Z",
+    "out_of_band": false
+  }
+}
+```
+
+- `name` — the schedule's `name`.
+- `scheduled_for` — the instant the fire was scheduled to occur (for
+  catchup, this is the _original_ missed instant, not now; for out-of-band,
+  this is the moment the request was received).
+- `out_of_band` — `true` for `POST /runs`, `false` otherwise.
+
+A single nested object (not flat `_schedule_name` keys) so one JSONB index
+path powers archive queries, user-defined headers can't collide
+field-by-field, and adding fields later (e.g. `fire_attempt`,
+`idempotency_key`) extends the nested object without polluting the
+top-level namespace. The `_schedule` top-level key is reserved; user
+headers containing it are rejected at validation.
 
 ---
 
@@ -632,7 +723,7 @@ Same network model as the queue. Schedules don't add a security layer.
 | Target queue does not exist                         | `queue.send` raises ERROR; transaction aborts; `consecutive_failures` incremented. After 3 consecutive failures the schedule is paused.                  | Operator creates the queue and resumes the schedule.       |
 | Target workflow does not exist                      | Workflow-start fails; same retry-then-pause path.                                                                                                        | Operator deploys the workflow definition and resumes.      |
 | Queue server restarts with active schedules         | Worker starts, immediately runs catchup for any missed fires, then enters normal poll loop.                                                              | Automatic.                                                 |
-| Queue server restarts with no schedules             | Worker does not start. No overhead.                                                                                                                      | n/a                                                        |
+| Queue server restarts with no schedules             | Worker starts; partial-index probe returns zero rows; loop sleeps `poll_ms`. Negligible cost.                                                            | n/a                                                        |
 | Function VM sleeping when schedule fires            | `queue.send` or topic fan-out delivers HTTP to the function VM's endpoint. Gateway wakes the VM. No special handling needed.                             | Automatic — standard wake-on-traffic path.                 |
 | Server offline past one or more fires               | On resume: if `catchup: false`, advance to next future fire. If `catchup: true`, fire each missed occurrence in order up to `catchup_limit`.             | Automatic. `catchup_limit` exceeded → skip + record error. |
 | Cron expression no longer parses (e.g. lib upgrade) | Worker sets `last_error`, pauses the schedule. Schedule rows are validated on every load to catch this immediately rather than at fire time.             | Operator updates the expression via `PATCH`.               |
@@ -645,13 +736,14 @@ Same network model as the queue. Schedules don't add a security layer.
 
 ## Performance notes
 
-- **Worker cost at idle (schedules exist)**: one query per `SCHEDULE_POLL_MS` returning zero
-  rows. With the partial index `WHERE status = 'active'` the planner does
-  an index-only scan; cost is sub-millisecond.
-- **Worker cost when no schedules exist**: zero. The worker is not running.
-- **Worker cost firing N due rows**: one CTE claim + N dispatches. Each
-  dispatch is one `queue.send` (or fan-out) + one `UPDATE`. All in one
-  transaction.
+- **Worker cost at idle**: one query per `SCHEDULE_POLL_MS` returning zero
+  rows from the partial index `WHERE status = 'active'`. Index-only scan;
+  sub-millisecond. Same whether the schedule table is empty or all
+  schedules are paused.
+- **Worker cost firing N due rows**: one CTE claim + N dispatches inside
+  one outer transaction, each dispatch wrapped in a SAVEPOINT for
+  per-schedule failure isolation. Each dispatch is one `queue.send`
+  (or `queue.publish_event` fan-out) + one `UPDATE`.
 - **Cron parse cost**: amortized; the canonical cron string is parsed
   once per advance into a small iterator. `next_fires` for the API
   response is N more iterator steps.
@@ -672,7 +764,7 @@ The design treats agents as a primary user. Specifically:
 
 1. **Idempotent upsert by name** (`PUT /v1/schedules/{name}`). An agent
    regenerating a config `PUT`s its desired set; rerunning is safe.
-2. **Preview-before-commit** (`POST /v1/schedules:preview`). Agents
+2. **Preview-before-commit** (`POST /v1/previews`). Agents
    validate an expression and see its `human_readable` + `next_fires`
    _before_ writing. Prevents the most common cron mistake — "I wrote
    `0 9 *` and it doesn't do what I think."
@@ -731,12 +823,13 @@ We add **one table, one background task, three expression forms**
 
 Zero new pgrx functions. Zero new wakeup mechanisms. Zero new wire
 protocols. The fire path goes through the same `queue.send` /
-`queue.send_topic` / workflow-start that producers and topics already
+`queue.publish_event` / workflow-start that producers and topics already
 use; the wakeup is the existing `XactCallback`. Sleeping function VMs
 wake via the existing HTTP fan-out — no scheduler-specific handling.
 
-The worker runs only when schedules exist. A deployment with no schedules
-pays nothing.
+The worker is always on but trivially cheap when idle: one query per
+poll cycle returning zero rows from a partial index `WHERE status = 'active'`,
+sub-millisecond. A deployment with no schedules pays effectively nothing.
 
 Schedules are not a separate service we built next to the queue — they
 are what the queue grows into when its producers start running on a

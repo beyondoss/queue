@@ -79,6 +79,62 @@ CREATE INDEX IF NOT EXISTS idx_event_subscriptions_covering
     ON queue.event_subscriptions (pattern)
     INCLUDE (id, queue_name, endpoint, protocol, raw_delivery, compiled_regex);
 
+------------------------------------------------------------
+-- Schedules: time-based triggers that fire into queues or topics.
+-- See SCHEDULES.md for the full design. One table, no new pgrx
+-- functions; the scheduler worker (Rust, in the queue server) polls this
+-- table and calls queue.send / queue.publish_event on commit.
+------------------------------------------------------------
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'schedule_status') THEN
+        CREATE TYPE queue.schedule_status AS ENUM ('active', 'paused');
+    END IF;
+END $$;
+
+-- 'workflow' is reserved from day 1; the API rejects it with 400 until the
+-- workflow runtime exists. Including it now avoids a future ALTER TYPE
+-- ADD VALUE migration when workflows ship.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'schedule_target_kind') THEN
+        CREATE TYPE queue.schedule_target_kind AS ENUM ('queue', 'topic', 'workflow');
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS queue.schedule (
+    schedule_id           BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY (CACHE 100),
+    name                  TEXT NOT NULL UNIQUE,
+    expression            TEXT NOT NULL,                       -- user's original input, for round-trip display
+    cron                  TEXT,                                -- canonical cron (NULL for one-shot)
+    fire_at               TIMESTAMP WITH TIME ZONE,            -- one-shot only
+    timezone              TEXT NOT NULL DEFAULT 'UTC',
+    jitter_secs           INTEGER NOT NULL DEFAULT 0,
+    catchup               BOOLEAN NOT NULL DEFAULT false,
+    catchup_limit         INTEGER NOT NULL DEFAULT 100,
+    failure_threshold     INTEGER NOT NULL DEFAULT 3,
+
+    target_kind           queue.schedule_target_kind NOT NULL,
+    target_name           TEXT NOT NULL,                       -- queue name | topic routing key | workflow name
+    payload               JSONB,
+    headers               JSONB,
+
+    status                queue.schedule_status NOT NULL DEFAULT 'active',
+    next_fire_at          TIMESTAMP WITH TIME ZONE NOT NULL,
+    last_fired_at         TIMESTAMP WITH TIME ZONE,
+    last_error            TEXT,
+    consecutive_failures  INTEGER NOT NULL DEFAULT 0,
+    fire_count            BIGINT NOT NULL DEFAULT 0,
+
+    created_at            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+
+    CONSTRAINT schedule_cron_xor_fire_at CHECK ((cron IS NOT NULL) <> (fire_at IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS schedule_due_idx
+    ON queue.schedule (next_fire_at)
+    WHERE status = 'active';
+
 DO
 $$
 BEGIN
@@ -87,6 +143,7 @@ BEGIN
         PERFORM pg_catalog.pg_extension_config_dump('queue.notify_insert_throttle', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.event_subscriptions', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.event_deliveries', '');
+        PERFORM pg_catalog.pg_extension_config_dump('queue.schedule', '');
     END IF;
 END
 $$;

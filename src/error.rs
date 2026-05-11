@@ -42,6 +42,15 @@ pub enum ApiError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("schedule not found: {0}")]
+    ScheduleNotFound(String),
+
+    #[error("schedule conflict: {0}")]
+    ScheduleConflict(String),
+
+    #[error("invalid schedule: {0}")]
+    ScheduleInvalid(String),
+
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
@@ -89,6 +98,19 @@ impl IntoResponse for ApiError {
                 "Invalid receipt handle".into(),
             ),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.clone()),
+            ApiError::ScheduleNotFound(name) => (
+                StatusCode::NOT_FOUND,
+                "schedule_not_found",
+                format!("Schedule '{name}' does not exist"),
+            ),
+            ApiError::ScheduleConflict(name) => (
+                StatusCode::CONFLICT,
+                "schedule_conflict",
+                format!("Schedule '{name}' already exists"),
+            ),
+            ApiError::ScheduleInvalid(msg) => {
+                (StatusCode::BAD_REQUEST, "schedule_invalid", msg.clone())
+            }
             ApiError::Database(e) => {
                 tracing::error!("database error: {e}");
                 (

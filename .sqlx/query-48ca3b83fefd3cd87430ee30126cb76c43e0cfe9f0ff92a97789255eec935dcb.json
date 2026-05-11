@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO queue.schedule (\n            name, expression, cron, fire_at, timezone, jitter_secs,\n            catchup, catchup_limit, failure_threshold,\n            target_kind, target_name, payload, headers, next_fire_at\n        )\n        VALUES (\n            $1, $2, $3, $4, $5, $6, $7, $8, $9,\n            $10::queue.schedule_target_kind, $11, $12::jsonb, $13::jsonb, $14\n        )\n        ON CONFLICT (name) DO UPDATE SET\n            expression           = EXCLUDED.expression,\n            cron                 = EXCLUDED.cron,\n            fire_at              = EXCLUDED.fire_at,\n            timezone             = EXCLUDED.timezone,\n            jitter_secs          = EXCLUDED.jitter_secs,\n            catchup              = EXCLUDED.catchup,\n            catchup_limit        = EXCLUDED.catchup_limit,\n            failure_threshold    = EXCLUDED.failure_threshold,\n            target_kind          = EXCLUDED.target_kind,\n            target_name          = EXCLUDED.target_name,\n            payload              = EXCLUDED.payload,\n            headers              = EXCLUDED.headers,\n            -- Only recompute next_fire_at when the schedule shape actually changed.\n            next_fire_at         = CASE\n                WHEN queue.schedule.cron IS DISTINCT FROM EXCLUDED.cron\n                  OR queue.schedule.fire_at IS DISTINCT FROM EXCLUDED.fire_at\n                  OR queue.schedule.timezone IS DISTINCT FROM EXCLUDED.timezone\n                THEN EXCLUDED.next_fire_at\n                ELSE queue.schedule.next_fire_at\n            END,\n            -- A PUT is an operator-acknowledged change; clear failure state.\n            consecutive_failures = 0,\n            last_error           = NULL,\n            updated_at           = now()\n        RETURNING (xmax = 0) AS \"is_insert!: bool\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_insert!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Int4",
+        "Bool",
+        "Int4",
+        "Int4",
+        {
+          "Custom": {
+            "name": "queue.schedule_target_kind",
+            "kind": {
+              "Enum": [
+                "queue",
+                "topic",
+                "workflow"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "48ca3b83fefd3cd87430ee30126cb76c43e0cfe9f0ff92a97789255eec935dcb"
+}

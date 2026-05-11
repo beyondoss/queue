@@ -4,5 +4,7 @@ pub mod delivery;
 pub mod event;
 pub mod queue_admin;
 pub mod receive;
+pub mod schedule;
+pub mod schedule_worker;
 pub mod send;
 pub mod visibility;

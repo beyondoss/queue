@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE queue.schedule\n                SET status = 'paused',\n                    last_error = 'no future occurrence',\n                    updated_at = now()\n                WHERE name = $1\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cadda74358dc91df68ae3eac652cc889bf96d631a6c10557c4e5226b660a094e"
+}

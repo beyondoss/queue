@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE queue.schedule\n        SET last_fired_at = $2,\n            fire_count    = fire_count + 1,\n            updated_at    = now()\n        WHERE name = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "132918ce6c4613559560aa36839a0325e3c6aa731c9e1d3ed76927e699a62346"
+}

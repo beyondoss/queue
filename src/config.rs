@@ -64,6 +64,30 @@ pub struct Config {
     /// Delivery worker maximum rows to claim per poll cycle.
     #[arg(long, env = "HTTP_DELIVERY_BATCH_SIZE", default_value = "50")]
     pub http_delivery_batch_size: i64,
+
+    /// Enable the schedule worker (cron / every / when triggers).
+    #[arg(long, env = "SCHEDULE_ENABLED", default_value = "true")]
+    pub schedule_enabled: bool,
+
+    /// Schedule worker poll interval in milliseconds.
+    ///
+    /// Floor on fire latency. With the partial index `WHERE status = 'active'`
+    /// an empty schedule table costs one sub-millisecond probe per poll.
+    #[arg(long, env = "SCHEDULE_POLL_MS", default_value = "1000")]
+    pub schedule_poll_ms: u64,
+
+    /// Schedule worker maximum rows to claim per poll cycle.
+    #[arg(long, env = "SCHEDULE_BATCH_SIZE", default_value = "32")]
+    pub schedule_batch_size: i64,
+
+    /// Number of upcoming fire timestamps to project in API responses
+    /// (`next_fires` array on schedules and previews).
+    #[arg(long, env = "SCHEDULE_PREVIEW_COUNT", default_value = "5")]
+    pub schedule_preview_count: usize,
+
+    /// Hard cap on `GET /v1/schedules` response size.
+    #[arg(long, env = "SCHEDULE_LIST_MAX", default_value = "1000")]
+    pub schedule_list_max: usize,
 }
 
 impl Config {

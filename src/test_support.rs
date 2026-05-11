@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 
 use crate::AppState;
 use crate::config::Config;
-use crate::ops::delivery;
+use crate::ops::{delivery, schedule_worker};
 use crate::signing::Signer;
 
 pub struct TestServer {
@@ -35,6 +35,11 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
         http_delivery_poll_ms: 50,
         http_delivery_timeout_secs: 5,
         http_delivery_batch_size: 50,
+        schedule_enabled: false,
+        schedule_poll_ms: 100,
+        schedule_batch_size: 32,
+        schedule_preview_count: 5,
+        schedule_list_max: 1000,
     };
 
     let metrics = Arc::new(crate::metrics::Metrics::new());
@@ -85,6 +90,11 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         http_delivery_poll_ms: 50,
         http_delivery_timeout_secs: 5,
         http_delivery_batch_size: 50,
+        schedule_enabled: true,
+        schedule_poll_ms: 100,
+        schedule_batch_size: 32,
+        schedule_preview_count: 5,
+        schedule_list_max: 1000,
     };
 
     // Start delivery worker with fast poll for tests; detach the handle since
@@ -98,6 +108,15 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         },
         Arc::new(crate::metrics::Metrics::new()),
     )?);
+
+    drop(schedule_worker::start(
+        pool.clone(),
+        schedule_worker::ScheduleWorkerConfig {
+            poll_interval_ms: 100,
+            batch_size: 32,
+        },
+        Arc::new(crate::metrics::Metrics::new()),
+    ));
 
     let base_url: Arc<str> = config.base_url().into();
     let signer = Arc::new(Signer::generate()?);
