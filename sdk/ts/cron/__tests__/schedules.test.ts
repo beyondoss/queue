@@ -179,39 +179,13 @@ describe("schedules — preview", () => {
     expect(error).toBeUndefined();
     expect(typeof data?.humanReadable).toBe("string");
   });
-});
 
-describe("schedules — sync", () => {
-  const client = cronClient();
-
-  it("sync upserts all specs and removes others", async () => {
-    const keep = uniqueName("keep");
-    const remove = uniqueName("remove");
-
-    // Seed a schedule that should be removed
-    await client.schedules.upsert({
-      name: remove,
-      every: "1h",
-      target: { queue: "test-q", message: {} },
+  it("preview returns humanReadable for fireAt one-shot", async () => {
+    const { data, error } = await client.schedules.preview({
+      fireAt: "2099-01-01T00:00:00Z",
     });
-
-    const { data, error } = await client.schedules.sync([
-      {
-        name: keep,
-        every: "1h",
-        target: { queue: "test-q", message: {} },
-      },
-    ]);
     expect(error).toBeUndefined();
-    expect(data?.upserted).toBe(1);
-    expect(data?.removed).toBeGreaterThanOrEqual(1);
-
-    const { data: all } = await client.schedules.list();
-    expect(all?.some((s) => s.name === keep)).toBe(true);
-    expect(all?.some((s) => s.name === remove)).toBe(false);
-
-    // Cleanup
-    await client.schedules.delete(keep);
+    expect(typeof data?.humanReadable).toBe("string");
   });
 });
 
@@ -219,15 +193,6 @@ describe("schedules — observability hooks", () => {
   it("fires onRequest and onResponse for each call", async () => {
     const requests: string[] = [];
     const responses: string[] = [];
-    const c = cronClient();
-    // Wrap with hooks via a new client instance
-    const hooked = {
-      ...c,
-      schedules: {
-        ...c.schedules,
-      },
-    };
-    void hooked; // just verifying createCronClient accepts hooks
     const name = uniqueName();
     const hClient = (await import("../src/client.js")).createCronClient({
       url: process.env["QUEUE_TEST_URL"]!,
@@ -241,6 +206,8 @@ describe("schedules — observability hooks", () => {
     });
     await hClient.schedules.delete(name);
     expect(requests).toContain("schedules.upsert");
+    expect(requests).toContain("schedules.delete");
     expect(responses).toContain("schedules.upsert");
+    expect(responses).toContain("schedules.delete");
   });
 });

@@ -106,7 +106,7 @@ Only `__cron_*` topic targets are touched. Schedules targeting queues, user-defi
 
 ### Management client
 
-`createCronClient()` / the lazy `cron` singleton provide direct schedule management without a handler or HTTP listener. All methods follow the same `cmd()` → `wrap()` → `camelize` pipeline as `@beyond.dev/queue` and `@beyond.dev/events`. `schedules.sync()` is a client-side operation: upsert all provided specs in parallel, then list all schedules and delete those not in the desired set. There is no server-side sync endpoint.
+`createCronClient()` / the lazy `cron` singleton provide direct schedule management without a handler or HTTP listener. All methods follow the same `cmd()` → `wrap()` → `camelize` pipeline as `@beyond.dev/queue` and `@beyond.dev/events`.
 
 ## State Machine
 

@@ -1,6 +1,52 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { start } from "../src/client.js";
+import { schedule, start } from "../src/client.js";
 import { cronClient, findFreePort, uniqueName } from "./harness.js";
+
+describe("start() — input validation", () => {
+  const serverUrl = process.env["QUEUE_TEST_URL"]!;
+
+  it("throws for an invalid job name", async () => {
+    const job = schedule({
+      name: "Bad Name",
+      every: "1h",
+      run: async () => {},
+    });
+    await expect(start([job], { url: serverUrl })).rejects.toThrow(
+      /Invalid schedule name/,
+    );
+  });
+
+  it("throws for duplicate job names", async () => {
+    const job = schedule({ name: "my-job", every: "1h", run: async () => {} });
+    await expect(start([job, job], { url: serverUrl })).rejects.toThrow(
+      /Duplicate schedule name/,
+    );
+  });
+
+  it("throws when BEYOND_QUEUE_URL is missing and no url option provided", async () => {
+    const job = schedule({ name: "my-job", every: "1h", run: async () => {} });
+    const saved = process.env["BEYOND_QUEUE_URL"];
+    delete process.env["BEYOND_QUEUE_URL"];
+    try {
+      await expect(start([job])).rejects.toThrow(/BEYOND_QUEUE_URL/);
+    } finally {
+      if (saved !== undefined) process.env["BEYOND_QUEUE_URL"] = saved;
+    }
+  });
+
+  it("throws when BEYOND_INTERNAL_URL is missing", async () => {
+    const job = schedule({ name: "my-job", every: "1h", run: async () => {} });
+    const saved = process.env["BEYOND_INTERNAL_URL"];
+    delete process.env["BEYOND_INTERNAL_URL"];
+    try {
+      await expect(start([job], { url: serverUrl })).rejects.toThrow(
+        /BEYOND_INTERNAL_URL/,
+      );
+    } finally {
+      if (saved !== undefined) process.env["BEYOND_INTERNAL_URL"] = saved;
+    }
+  });
+});
 
 describe("start() — worker lifecycle", () => {
   const client = cronClient();
@@ -248,6 +294,105 @@ describe("start() — worker lifecycle", () => {
       ac.abort();
       await done;
     }
+  });
+
+  it("passes CronContext with correct name, ISO-8601 scheduledFor, and boolean outOfBand", async () => {
+    const name = uniqueName("ctx");
+    cleanupNames.push(name);
+    const port = await findFreePort();
+    const ac = new AbortController();
+    let capturedCtx:
+      | { name: string; scheduledFor: string; outOfBand: boolean }
+      | undefined;
+
+    const done = start(
+      [{
+        name,
+        spec: { name, every: "1h" },
+        handler: async (ctx) => {
+          capturedCtx = ctx;
+        },
+      }],
+      { url: serverUrl, port, signal: ac.signal },
+    );
+
+    await new Promise<void>((r) => setTimeout(r, 200));
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/__cron/${name}`, {
+        method: "POST",
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      });
+      expect(res.status).toBe(200);
+      expect(capturedCtx?.name).toBe(name);
+      expect(capturedCtx?.scheduledFor).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+      );
+      expect(typeof capturedCtx?.outOfBand).toBe("boolean");
+    } finally {
+      ac.abort();
+      await done;
+    }
+  });
+
+  it("returns 405 for non-POST requests", async () => {
+    const name = uniqueName("405");
+    cleanupNames.push(name);
+    const port = await findFreePort();
+    const ac = new AbortController();
+
+    const done = start(
+      [{ name, spec: { name, every: "1h" }, handler: async () => {} }],
+      { url: serverUrl, port, signal: ac.signal },
+    );
+
+    await new Promise<void>((r) => setTimeout(r, 200));
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/__cron/${name}`, {
+        method: "GET",
+      });
+      expect(res.status).toBe(405);
+    } finally {
+      ac.abort();
+      await done;
+    }
+  });
+
+  it("resolves cleanly when aborted during an in-flight handler", async () => {
+    const name = uniqueName("inflight");
+    cleanupNames.push(name);
+    const port = await findFreePort();
+    const ac = new AbortController();
+    let handlerStarted = false;
+
+    const done = start(
+      [{
+        name,
+        spec: { name, every: "1h" },
+        handler: async () => {
+          handlerStarted = true;
+          await new Promise<void>((r) => setTimeout(r, 500));
+        },
+      }],
+      { url: serverUrl, port, signal: ac.signal },
+    );
+
+    await new Promise<void>((r) => setTimeout(r, 200));
+
+    // Fire the handler without awaiting the response
+    fetch(`http://127.0.0.1:${port}/__cron/${name}`, {
+      method: "POST",
+      body: "{}",
+    }).catch(() => {});
+
+    // Let the handler begin, then abort
+    await new Promise<void>((r) => setTimeout(r, 50));
+    expect(handlerStarted).toBe(true);
+
+    ac.abort();
+    await expect(done).resolves.toBeUndefined();
   });
 
   it("shuts down cleanly on signal abort", async () => {

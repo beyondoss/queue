@@ -136,14 +136,6 @@ export interface CronClient {
     /** Create or replace a schedule (PUT semantics — idempotent). */
     upsert(spec: ScheduleSpec): CronResult<Schedule>;
 
-    /**
-     * Upsert all provided specs and delete any schedules not in the list.
-     * Always declarative — the provided list is the desired state.
-     */
-    sync(
-      specs: ScheduleSpec[],
-    ): CronResult<{ upserted: number; removed: number }>;
-
     /** Dry-run a schedule expression. No schedule is created. */
     preview(input: PreviewSpec): CronResult<Preview>;
 
@@ -551,48 +543,6 @@ export function createCronClient(opts?: CronClientOptions): CronClient {
             body: snakenize(spec) as components["schemas"]["ScheduleSpec"],
           }),
         )),
-
-      sync: cmd("schedules.sync", async (specs) => {
-        const desired = new Map(specs.map((s) => [s.name, s]));
-
-        // Upsert all
-        await Promise.all(
-          specs.map((spec) =>
-            client.PUT("/v1/schedules/{name}", {
-              params: { path: { name: spec.name } },
-              body: snakenize(spec) as components["schemas"]["ScheduleSpec"],
-            })
-          ),
-        );
-
-        // List all and delete those not in desired set
-        const { data: all, error, response } = await client.GET(
-          "/v1/schedules",
-          {},
-        );
-        if (error) {
-          return {
-            data: undefined,
-            error: toCronError(error, response),
-            response,
-          };
-        }
-
-        const toDelete = (all ?? []).filter((s) => !desired.has(s.name));
-        await Promise.all(
-          toDelete.map((s) =>
-            client.DELETE("/v1/schedules/{name}", {
-              params: { path: { name: s.name } },
-            })
-          ),
-        );
-
-        return {
-          data: { upserted: specs.length, removed: toDelete.length },
-          error: undefined,
-          response,
-        };
-      }),
 
       preview: cmd(
         "schedules.preview",
