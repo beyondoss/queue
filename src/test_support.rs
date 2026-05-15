@@ -40,6 +40,9 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
         schedule_batch_size: 32,
         schedule_preview_count: 5,
         schedule_list_max: 1000,
+        tls_cert: None,
+        tls_key: None,
+        tls_ca: None,
     };
 
     let metrics = Arc::new(crate::metrics::Metrics::new());
@@ -95,6 +98,9 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         schedule_batch_size: 32,
         schedule_preview_count: 5,
         schedule_list_max: 1000,
+        tls_cert: None,
+        tls_key: None,
+        tls_ca: None,
     };
 
     // Start delivery worker with fast poll for tests; detach the handle since

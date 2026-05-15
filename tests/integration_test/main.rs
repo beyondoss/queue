@@ -13,4 +13,5 @@ mod schedules;
 mod sns_pubsub;
 mod sqs_protocol;
 mod subscriptions;
+mod tls;
 mod visibility;
