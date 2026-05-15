@@ -32,6 +32,7 @@ export {
   type ReceiveOptions,
   type Schema,
   type SendOptions,
+  type TlsOptions,
 } from "./client.js";
 export { QueueError } from "./errors.js";
 export type { Camelize } from "./utils/camelize.js";

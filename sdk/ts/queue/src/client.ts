@@ -4,6 +4,81 @@ import { QueueError } from "./errors.js";
 import type { components, paths } from "./types.js";
 import { type Camelize, camelize } from "./utils/camelize.js";
 
+// ── TLS types ─────────────────────────────────────────────────────────────────
+
+export interface TlsOptions {
+  /** PEM-encoded CA certificate(s) to trust. */
+  ca?: string | string[];
+  /** PEM-encoded client certificate for mTLS. */
+  cert?: string;
+  /** PEM-encoded client private key for mTLS. */
+  key?: string;
+}
+
+// ── TLS-aware fetch builder ───────────────────────────────────────────────────
+
+type MaybeFetch = typeof globalThis.fetch;
+
+function buildTlsFetchPromise(tls: TlsOptions): Promise<MaybeFetch> {
+  const cas = Array.isArray(tls.ca) ? tls.ca : tls.ca ? [tls.ca] : undefined;
+
+  // Deno
+  const gAny = globalThis as Record<string, unknown>;
+  if (
+    typeof gAny["Deno"] !== "undefined"
+    && typeof (gAny["Deno"] as Record<string, unknown>)["createHttpClient"]
+      === "function"
+  ) {
+    const denoNs = gAny["Deno"] as {
+      createHttpClient: (opts: Record<string, unknown>) => unknown;
+    };
+    const client = denoNs.createHttpClient({
+      caCerts: cas,
+      certChain: tls.cert,
+      privateKey: tls.key,
+    });
+    return Promise.resolve(
+      (url: RequestInfo | URL, init?: RequestInit) =>
+        globalThis.fetch(url, { ...init, client } as RequestInit),
+    );
+  }
+
+  // Node / Bun — undici
+  const _undici = "undici";
+  return (import(_undici) as Promise<any>)
+    .then(({ fetch: f, Agent }: any) => {
+      const connect: Record<string, unknown> = {};
+      if (cas != null) connect["ca"] = cas;
+      if (tls.cert != null) connect["cert"] = tls.cert;
+      if (tls.key != null) connect["key"] = tls.key;
+      const agent = new Agent({ allowH2: true, connect });
+      // undici-extended RequestInit that carries the dispatcher
+      type UndiciInit = RequestInit & { dispatcher: unknown };
+      const withAgent = (init?: RequestInit): UndiciInit => ({
+        ...(init ?? {}),
+        dispatcher: agent,
+      });
+      return (url: RequestInfo | URL, init?: RequestInit) => {
+        // undici's fetch does not accept a Request object when a dispatcher is
+        // set alongside it — extract the URL string and merge the options.
+        if (url instanceof Request) {
+          const req = url as Request;
+          const hasBody = req.method !== "GET" && req.method !== "HEAD";
+          const merged: UndiciInit = {
+            method: req.method,
+            headers: req.headers,
+            ...(init ?? {}),
+            ...(hasBody && { body: init?.body ?? req.body }),
+            dispatcher: agent,
+          };
+          return f(req.url, merged) as Promise<Response>;
+        }
+        return f(url, withAgent(init)) as Promise<Response>;
+      };
+    })
+    .catch(() => globalThis.fetch);
+}
+
 export { QueueError } from "./errors.js";
 export type { components, operations, paths } from "./types.js";
 export type { Camelize } from "./utils/camelize.js";
@@ -104,6 +179,12 @@ export interface QueueClientOptions {
   onRequest?: (event: QueueRequestEvent) => void;
   /** Called after each response. */
   onResponse?: (event: QueueResponseEvent) => void;
+  /**
+   * TLS options for mTLS connections.
+   * Node/Bun use undici Agent; Deno uses Deno.createHttpClient;
+   * edge/browser runtimes silently ignore these options.
+   */
+  tls?: TlsOptions;
 }
 
 export type QueueResult<T = undefined> = Promise<
@@ -219,12 +300,18 @@ function wrap<T>(
 }
 
 function buildFetch(
-  base: typeof globalThis.fetch | undefined,
+  base: MaybeFetch | undefined,
+  tlsFetchPromise: Promise<MaybeFetch> | undefined,
   retries: number,
   timeout: number | undefined,
-): typeof globalThis.fetch {
-  const fetchFn = base ?? globalThis.fetch;
+): MaybeFetch {
+  let resolvedTls: MaybeFetch | undefined;
+  const tlsInit = tlsFetchPromise?.then((f) => {
+    resolvedTls = f;
+  });
   return async (input, init) => {
+    if (tlsInit) await tlsInit;
+    const fetchFn = base ?? resolvedTls ?? globalThis.fetch;
     const signal = timeout != null
       ? AbortSignal.timeout(timeout)
       : init?.signal;
@@ -272,10 +359,19 @@ export function createQueueClient<Map extends QueueSchemaMap>(
   const token = opts?.token ?? env["BEYOND_QUEUE_TOKEN"];
   const { onRequest, onResponse } = opts ?? {};
 
+  const tlsFetchPromise = opts?.tls
+    ? buildTlsFetchPromise(opts.tls)
+    : undefined;
+
   const client = createFetchClient<paths>({
     baseUrl: base,
     headers: { Authorization: `Bearer ${token ?? "anon"}` },
-    fetch: buildFetch(opts?.fetch, opts?.retries ?? 2, opts?.timeout),
+    fetch: buildFetch(
+      opts?.fetch,
+      tlsFetchPromise,
+      opts?.retries ?? 2,
+      opts?.timeout,
+    ),
   });
 
   // Wraps a method to fire onRequest/onResponse hooks around it.
