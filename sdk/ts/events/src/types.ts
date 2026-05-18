@@ -4,1710 +4,1712 @@
  */
 
 export interface paths {
-    "/v1/events/{pattern}/subscriptions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List all subscriptions for an event pattern. Returns subscriptions whose pattern
-         *     exactly matches the given value.
-         */
-        get: operations["list_event_subscriptions"];
-        put?: never;
-        /**
-         * Subscribe a queue or HTTP endpoint to an event pattern. Messages published to any
-         *     routing key that matches `pattern` (glob syntax) will be delivered to this subscriber.
-         * @description Queue subscription: provide `queue_name` — messages are enqueued directly.
-         *     Webhook subscription: provide `protocol` (`"http"` or `"https"`) and `endpoint` URL.
-         */
-        post: operations["subscribe"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+  "/v1/events/{pattern}/subscriptions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/events/{pattern}/subscriptions/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Remove an event subscription by ID. Idempotent: returns 404 if the subscription
-         *     no longer exists.
-         */
-        delete: operations["unsubscribe"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * List all subscriptions for an event pattern. Returns subscriptions whose pattern
+     *     exactly matches the given value.
+     */
+    get: operations["list_event_subscriptions"];
+    put?: never;
+    /**
+     * Subscribe a queue or HTTP endpoint to an event pattern. Messages published to any
+     *     routing key that matches `pattern` (glob syntax) will be delivered to this subscriber.
+     * @description Queue subscription: provide `queue_name` — messages are enqueued directly.
+     *     Webhook subscription: provide `protocol` (`"http"` or `"https"`) and `endpoint` URL.
+     */
+    post: operations["subscribe"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/events/{pattern}/subscriptions/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/events/{routing_key}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Publish a message to an event routing key. The routing key is matched against all
-         *     subscription patterns (glob syntax). One copy of the message is enqueued in each
-         *     matching queue and an HTTP POST is dispatched to each matching HTTP/HTTPS endpoint.
-         * @description HTTP subscribers receive the raw message body or an SNS-style notification envelope
-         *     depending on how the subscription was created (`envelope` flag at subscribe time).
-         */
-        post: operations["publish_event"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Remove an event subscription by ID. Idempotent: returns 404 if the subscription
+     *     no longer exists.
+     */
+    delete: operations["unsubscribe"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/events/{routing_key}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/previews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Preview schedule expression (dry-run, no persistence)
-         * @description Parses and validates a schedule expression and returns the canonical cron string, a human-readable description, and a projection of upcoming fire times. No schedule is created or modified. Use this to validate user input before calling `POST /v1/schedules` or to display a human-friendly preview in a UI.
-         */
-        post: operations["preview_schedule"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /**
+     * Publish a message to an event routing key. The routing key is matched against all
+     *     subscription patterns (glob syntax). One copy of the message is enqueued in each
+     *     matching queue and an HTTP POST is dispatched to each matching HTTP/HTTPS endpoint.
+     * @description HTTP subscribers receive the raw message body or an SNS-style notification envelope
+     *     depending on how the subscription was created (`envelope` flag at subscribe time).
+     */
+    post: operations["publish_event"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/previews": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/queues": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List all queues. Returns metadata for every queue in the system, ordered by name. */
-        get: operations["list_queues"];
-        put?: never;
-        /**
-         * Create a new queue. Standard queues offer at-least-once, unordered delivery. FIFO
-         *     queues (`fifo: true`) guarantee per-group ordering at lower throughput. Returns 201
-         *     on success; the queue name is reserved immediately.
-         */
-        post: operations["create_queue"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /**
+     * Preview schedule expression (dry-run, no persistence)
+     * @description Parses and validates a schedule expression and returns the canonical cron string, a human-readable description, and a projection of upcoming fire times. No schedule is created or modified. Use this to validate user input before calling `POST /v1/schedules` or to display a human-friendly preview in a UI.
+     */
+    post: operations["preview_schedule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/queues": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/queues/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Fetch real-time metrics for a single queue: depth, message age, and total throughput. */
-        get: operations["get_queue"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete a queue and all of its messages permanently. Idempotent: safe to call even
-         *     if the queue is already gone.
-         */
-        delete: operations["delete_queue"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List all queues. Returns metadata for every queue in the system, ordered by name. */
+    get: operations["list_queues"];
+    put?: never;
+    /**
+     * Create a new queue. Standard queues offer at-least-once, unordered delivery. FIFO
+     *     queues (`fifo: true`) guarantee per-group ordering at lower throughput. Returns 201
+     *     on success; the queue name is reserved immediately.
+     */
+    post: operations["create_queue"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/queues/{name}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/queues/{name}/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Receive up to `max` messages from a queue. Received messages are hidden from other
-         *     consumers for `vt` seconds (visibility timeout). Delete them after processing to
-         *     prevent re-delivery. If `wait` > 0 and the queue is empty, the call long-polls for
-         *     up to that many seconds before returning an empty array. Set `fifo=true` to receive
-         *     messages in strict enqueue order within each `group_id`.
-         */
-        get: operations["receive_messages"];
-        put?: never;
-        /**
-         * Send one or more messages to a queue. The body is either a single message object or
-         *     a JSON array of message objects — the shape is detected automatically.
-         * @description Batch sends with a uniform `delay` value are committed in a single statement for
-         *     maximum throughput. Set `async_commit=true` to skip WAL fsync for best-effort,
-         *     high-speed sends at the cost of crash durability.
-         */
-        post: operations["send_messages"];
-        /**
-         * Acknowledge and delete multiple messages in one request. Non-existent IDs are
-         *     silently ignored. The response lists only the IDs that were actually deleted.
-         */
-        delete: operations["delete_batch"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Fetch real-time metrics for a single queue: depth, message age, and total throughput. */
+    get: operations["get_queue"];
+    put?: never;
+    post?: never;
+    /**
+     * Delete a queue and all of its messages permanently. Idempotent: safe to call even
+     *     if the queue is already gone.
+     */
+    delete: operations["delete_queue"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/queues/{name}/messages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/queues/{name}/messages/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Acknowledge and permanently delete a single message. Safe to call multiple times —
-         *     returns 404 if the message has already been deleted or never existed.
-         */
-        delete: operations["delete_message"];
-        options?: never;
-        head?: never;
-        /**
-         * Extend or reduce the visibility timeout of an in-flight message. Use this to
-         *     prevent re-delivery when processing takes longer than the original `vt`, or to
-         *     make a message immediately visible again by setting `vt=0`.
-         */
-        patch: operations["change_visibility"];
-        trace?: never;
+    /**
+     * Receive up to `max` messages from a queue. Received messages are hidden from other
+     *     consumers for `vt` seconds (visibility timeout). Delete them after processing to
+     *     prevent re-delivery. If `wait` > 0 and the queue is empty, the call long-polls for
+     *     up to that many seconds before returning an empty array. Set `fifo=true` to receive
+     *     messages in strict enqueue order within each `group_id`.
+     */
+    get: operations["receive_messages"];
+    put?: never;
+    /**
+     * Send one or more messages to a queue. The body is either a single message object or
+     *     a JSON array of message objects — the shape is detected automatically.
+     * @description Batch sends with a uniform `delay` value are committed in a single statement for
+     *     maximum throughput. Set `async_commit=true` to skip WAL fsync for best-effort,
+     *     high-speed sends at the cost of crash durability.
+     */
+    post: operations["send_messages"];
+    /**
+     * Acknowledge and delete multiple messages in one request. Non-existent IDs are
+     *     silently ignored. The response lists only the IDs that were actually deleted.
+     */
+    delete: operations["delete_batch"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/queues/{name}/messages/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/queues/{name}/purge": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Delete all messages in a queue without removing the queue itself. Returns the count
-         *     of messages removed.
-         */
-        post: operations["purge_queue"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Acknowledge and permanently delete a single message. Safe to call multiple times —
+     *     returns 404 if the message has already been deleted or never existed.
+     */
+    delete: operations["delete_message"];
+    options?: never;
+    head?: never;
+    /**
+     * Extend or reduce the visibility timeout of an in-flight message. Use this to
+     *     prevent re-delivery when processing takes longer than the original `vt`, or to
+     *     make a message immediately visible again by setting `vt=0`.
+     */
+    patch: operations["change_visibility"];
+    trace?: never;
+  };
+  "/v1/queues/{name}/purge": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/queues/{name}/subscriptions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List all topic subscriptions targeting this queue. */
-        get: operations["list_queue_subscriptions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /**
+     * Delete all messages in a queue without removing the queue itself. Returns the count
+     *     of messages removed.
+     */
+    post: operations["purge_queue"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/queues/{name}/subscriptions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/schedules": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List schedules
-         * @description Returns all schedules up to `QUEUE_SCHEDULE_LIST_MAX` (default 1000), ordered by name. Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.
-         */
-        get: operations["list_schedules"];
-        put?: never;
-        /**
-         * Create schedule (strict — 409 if name already exists)
-         * @description Creates a new schedule. Returns `201 Created` with a `Location` header on success. Returns `409 Conflict` if a schedule with the same `name` already exists — use `PUT /v1/schedules/{name}` for idempotent upsert.
-         */
-        post: operations["create_schedule"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List all topic subscriptions targeting this queue. */
+    get: operations["list_queue_subscriptions"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/schedules": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/schedules/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get schedule
-         * @description Fetches a single schedule by its name. The response includes `human_readable` and `next_fires` computed at request time.
-         */
-        get: operations["get_schedule"];
-        /**
-         * Upsert schedule (idempotent — safe to call repeatedly)
-         * @description Creates or replaces the schedule at `{name}`. Returns `201 Created` on first write, `200 OK` on subsequent calls with the same or different spec. On update, `fire_count` and operational state are preserved; `consecutive_failures` is cleared. Use this for config-sync workflows where the caller wants "make it so" semantics. For strict create-or-error, use `POST /v1/schedules`.
-         */
-        put: operations["upsert_schedule"];
-        post?: never;
-        /**
-         * Delete schedule (idempotent)
-         * @description Deletes the schedule. Returns `204 No Content` whether or not the schedule existed. Safe to call multiple times or after the schedule has already been deleted.
-         */
-        delete: operations["delete_schedule"];
-        options?: never;
-        head?: never;
-        /**
-         * Patch schedule (partial update or pause/resume)
-         * @description Applies a partial update to the schedule. Only fields present in the body are changed; omitted fields keep their current values. To pause: `{"status": "paused"}`. To resume: `{"status": "active"}`. When `status` is the only field in the request, a fast path is used that skips expression re-parsing and `next_fire_at` recomputation. Updating any expression field (`cron`, `every`, `when`, `fire_at`, or `timezone`) recomputes `next_fire_at` and resets `consecutive_failures`.
-         */
-        patch: operations["patch_schedule"];
-        trace?: never;
+    /**
+     * List schedules
+     * @description Returns all schedules up to `QUEUE_SCHEDULE_LIST_MAX` (default 1000), ordered by name. Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.
+     */
+    get: operations["list_schedules"];
+    put?: never;
+    /**
+     * Create schedule (strict — 409 if name already exists)
+     * @description Creates a new schedule. Returns `201 Created` with a `Location` header on success. Returns `409 Conflict` if a schedule with the same `name` already exists — use `PUT /v1/schedules/{name}` for idempotent upsert.
+     */
+    post: operations["create_schedule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/schedules/{name}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/v1/schedules/{name}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Trigger manual run (out-of-band fire)
-         * @description Fires the schedule immediately, out of band. The `next_fire_at` is not changed — the normal schedule continues unaffected. `fire_count` is incremented and `last_fired_at` is updated. The produced message(s) carry `headers._schedule.out_of_band = true`. For topic targets, `msg_ids` contains one id per fanned-out subscriber queue.
-         */
-        post: operations["run_schedule"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * Get schedule
+     * @description Fetches a single schedule by its name. The response includes `human_readable` and `next_fires` computed at request time.
+     */
+    get: operations["get_schedule"];
+    /**
+     * Upsert schedule (idempotent — safe to call repeatedly)
+     * @description Creates or replaces the schedule at `{name}`. Returns `201 Created` on first write, `200 OK` on subsequent calls with the same or different spec. On update, `fire_count` and operational state are preserved; `consecutive_failures` is cleared. Use this for config-sync workflows where the caller wants "make it so" semantics. For strict create-or-error, use `POST /v1/schedules`.
+     */
+    put: operations["upsert_schedule"];
+    post?: never;
+    /**
+     * Delete schedule (idempotent)
+     * @description Deletes the schedule. Returns `204 No Content` whether or not the schedule existed. Safe to call multiple times or after the schedule has already been deleted.
+     */
+    delete: operations["delete_schedule"];
+    options?: never;
+    head?: never;
+    /**
+     * Patch schedule (partial update or pause/resume)
+     * @description Applies a partial update to the schedule. Only fields present in the body are changed; omitted fields keep their current values. To pause: `{"status": "paused"}`. To resume: `{"status": "active"}`. When `status` is the only field in the request, a fast path is used that skips expression re-parsing and `next_fire_at` recomputation. Updating any expression field (`cron`, `every`, `when`, `fire_at`, or `timezone`) recomputes `next_fire_at` and resets `consecutive_failures`.
+     */
+    patch: operations["patch_schedule"];
+    trace?: never;
+  };
+  "/v1/schedules/{name}/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
+    get?: never;
+    put?: never;
+    /**
+     * Trigger manual run (out-of-band fire)
+     * @description Fires the schedule immediately, out of band. The `next_fire_at` is not changed — the normal schedule continues unaffected. `fire_count` is incremented and `last_fired_at` is updated. The produced message(s) carry `headers._schedule.out_of_band = true`. For topic targets, `msg_ids` contains one id per fanned-out subscriber queue.
+     */
+    post: operations["run_schedule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: {
-        /** @description Request body to extend or reduce a message's visibility timeout. */
-        ChangeVisibilityRequest: {
-            /**
-             * Format: int32
-             * @description New visibility timeout in seconds from now. The message will not be returned by
-             *     receive calls until this duration elapses. Set to `0` to make the message
-             *     immediately visible.
-             */
-            vt: number;
-        };
-        /** @description Confirmation of a visibility timeout change. */
-        ChangeVisibilityResponse: {
-            /**
-             * Format: int64
-             * @description Message ID.
-             */
-            id: number;
-            /**
-             * Format: date-time
-             * @description Updated timestamp after which the message becomes visible again.
-             */
-            visible_at: string;
-        };
-        /** @description Request body for queue creation. */
-        CreateQueueRequest: {
-            /**
-             * @description When `true`, creates a FIFO queue: messages with the same `group_id` are delivered
-             *     in strict enqueue order. Default: `false` (standard queue, at-least-once unordered).
-             */
-            fifo?: boolean;
-            /**
-             * @description Queue name. Must be unique within the instance. Letters, digits, hyphens, and
-             *     underscores only.
-             */
-            name: string;
-        };
-        /** @description Request body for batch message deletion. */
-        DeleteBatchRequest: {
-            /** @description IDs of messages to delete. Non-existent IDs are silently skipped. */
-            ids: number[];
-        };
-        /** @description Result of a batch delete operation. */
-        DeletedResponse: {
-            /** @description IDs of the messages that were actually deleted. */
-            deleted: number[];
-        };
-        /** @description Inner error payload for all non-2xx responses. */
-        ErrorBody: {
-            /** @description Machine-readable error code, e.g. `"queue_not_found"`, `"bad_request"`. */
-            code: string;
-            /** @description Optional actionable guidance present on configuration-gate errors. */
-            hint?: string | null;
-            /** @description Human-readable description of the error. */
-            message: string;
-        };
-        /** @description Wire-format error envelope returned on all non-2xx responses. */
-        ErrorResponse: {
-            error: components["schemas"]["ErrorBody"];
-        };
-        /** @description A received message. */
-        MessageResponse: {
-            /**
-             * Format: date-time
-             * @description Timestamp when the message was added to the queue.
-             */
-            enqueued_at: string;
-            /** @description Metadata attached at send time. `null` when none was provided. */
-            headers: unknown;
-            /**
-             * Format: int64
-             * @description Message ID. Use this to delete or extend the visibility of the message.
-             */
-            id: number;
-            /** @description Message body as originally sent. */
-            message: unknown;
-            /**
-             * Format: int32
-             * @description How many times this message has been delivered. Starts at `1` on first delivery.
-             *     A value greater than `1` indicates a prior consumer did not delete the message
-             *     before its visibility timeout expired.
-             */
-            read_count: number;
-            /**
-             * Format: date-time
-             * @description Timestamp after which the message becomes visible again if not deleted. Extends
-             *     on each `PATCH /v1/queues/{name}/messages/{id}` call.
-             */
-            visible_at: string;
-        };
-        /**
-         * @description Preview returned by `POST /v1/previews` — the canonical form of a schedule
-         *     expression plus a projection of upcoming fire times. No schedule is created.
-         * @example {
-         *       "cron": "0 9 * * 1-5",
-         *       "human_readable": "At 09:00, Monday through Friday, America/New_York",
-         *       "next_fires": [
-         *         "2026-05-11T13:00:00Z",
-         *         "2026-05-12T13:00:00Z",
-         *         "2026-05-13T13:00:00Z"
-         *       ],
-         *       "timezone": "America/New_York"
-         *     }
-         */
-        Preview: {
-            /** @description Canonical cron pattern derived from the expression. Absent for one-shot `fire_at` inputs. */
-            cron?: string | null;
-            /**
-             * Format: date-time
-             * @description One-shot fire timestamp. Present only when the input was `fire_at`.
-             */
-            fire_at?: string | null;
-            /** @description Human-readable description of the schedule expression. */
-            human_readable: string;
-            /** @description Projected next N fire times in UTC. */
-            next_fires: string[];
-            /** @description IANA timezone used for projection (defaults to `"UTC"`). */
-            timezone: string;
-        };
-        /**
-         * @description Input for a dry-run preview. Provide exactly one of `cron`, `every`,
-         *     `when`, or `fire_at`. No schedule is created or modified.
-         * @example {
-         *       "timezone": "America/New_York",
-         *       "when": "every weekday at 9am"
-         *     }
-         */
-        PreviewSpec: {
-            /** @description Raw 5- or 6-field cron pattern. Mutually exclusive with `every`, `when`, `fire_at`. */
-            cron?: string | null;
-            /** @description Fixed-interval shorthand, e.g. `"5m"`. Mutually exclusive. */
-            every?: string | null;
-            /**
-             * Format: date-time
-             * @description One-shot ISO-8601 timestamp. Mutually exclusive.
-             */
-            fire_at?: string | null;
-            /** @description IANA timezone for cron evaluation. Defaults to `"UTC"`. */
-            timezone?: string | null;
-            /** @description Natural-language expression, e.g. `"every weekday at 9am"`. Mutually exclusive. */
-            when?: string | null;
-        };
-        /** @description Result of a purge operation. */
-        PurgeResponse: {
-            /**
-             * Format: int64
-             * @description Number of messages deleted from the queue.
-             */
-            deleted: number;
-        };
-        /** @description Real-time queue metrics. */
-        QueueMetricsResponse: {
-            /** @description Queue name. */
-            name: string;
-            /**
-             * Format: int64
-             * @description Age in seconds of the newest visible message. `null` when the queue is empty.
-             */
-            newest_msg_age_sec?: number | null;
-            /**
-             * Format: int64
-             * @description Age in seconds of the oldest visible message. `null` when the queue is empty.
-             */
-            oldest_msg_age_sec?: number | null;
-            /**
-             * Format: int64
-             * @description Number of messages currently visible (not hidden by a visibility timeout).
-             */
-            queue_length: number;
-            /**
-             * Format: date-time
-             * @description Timestamp when these metrics were sampled.
-             */
-            scrape_time: string;
-            /**
-             * Format: int64
-             * @description Total messages ever enqueued, including already-deleted ones.
-             */
-            total_messages: number;
-        };
-        /** @description Queue metadata returned by list operations. */
-        QueueResponse: {
-            /**
-             * Format: date-time
-             * @description Timestamp when the queue was created.
-             */
-            created_at: string;
-            /** @description `true` when the queue is backed by a partitioned table for high-throughput workloads. */
-            is_partitioned: boolean;
-            /**
-             * @description `true` when the queue uses an unlogged table — writes are faster but messages are
-             *     not crash-safe.
-             */
-            is_unlogged: boolean;
-            /** @description Queue name. */
-            name: string;
-        };
-        /**
-         * @description Result of a manual `POST /v1/schedules/{name}/runs`.
-         *     For queue targets `msg_ids` is a singleton; for topic targets it contains
-         *     one id per fanned-out subscriber queue.
-         * @example {
-         *       "fired_at": "2026-05-10T14:23:00Z",
-         *       "msg_ids": [
-         *         42
-         *       ],
-         *       "out_of_band": true,
-         *       "schedule_name": "daily-report",
-         *       "scheduled_for": "2026-05-10T14:23:00Z"
-         *     }
-         */
-        RunResult: {
-            /**
-             * Format: date-time
-             * @description Timestamp when the run was dispatched.
-             */
-            fired_at: string;
-            /** @description Message IDs produced. Singleton for queue targets; one per subscriber for topic targets. */
-            msg_ids: number[];
-            /** @description `true` for manual runs; `false` for worker-scheduled fires. */
-            out_of_band: boolean;
-            /** @description Name of the schedule that was run. */
-            schedule_name: string;
-            /**
-             * Format: date-time
-             * @description `fired_at` for manual runs; the due `next_fire_at` for scheduled runs.
-             */
-            scheduled_for: string;
-        };
-        /**
-         * @description A stored schedule, including derived `human_readable` description and
-         *     `next_fires` projection computed at response time.
-         * @example {
-         *       "catchup": false,
-         *       "catchup_limit": 100,
-         *       "consecutive_failures": 0,
-         *       "created_at": "2026-05-01T00:00:00Z",
-         *       "cron": "0 9 * * 1-5",
-         *       "expression": "every weekday at 9am",
-         *       "failure_threshold": 3,
-         *       "fire_count": 42,
-         *       "human_readable": "At 09:00, Monday through Friday, America/New_York",
-         *       "jitter_secs": 0,
-         *       "name": "daily-report",
-         *       "next_fire_at": "2026-05-12T13:00:00Z",
-         *       "next_fires": [
-         *         "2026-05-12T13:00:00Z",
-         *         "2026-05-13T13:00:00Z"
-         *       ],
-         *       "status": "active",
-         *       "target": {
-         *         "message": {
-         *           "type": "daily_summary"
-         *         },
-         *         "queue": "reports"
-         *       },
-         *       "timezone": "America/New_York",
-         *       "updated_at": "2026-05-01T00:00:00Z"
-         *     }
-         */
-        Schedule: {
-            /** @description Whether missed fires are backfilled on worker restart. */
-            catchup: boolean;
-            /**
-             * Format: int32
-             * @description Maximum backfill count per catchup pass.
-             */
-            catchup_limit: number;
-            /**
-             * Format: int32
-             * @description Number of consecutive failures since the last successful fire.
-             */
-            consecutive_failures: number;
-            /** Format: date-time */
-            created_at: string;
-            /** @description Canonical cron pattern stored in the database. Present for recurring schedules; absent for one-shots. */
-            cron?: string | null;
-            /** @description Original user-supplied expression string (cron pattern, interval, natural language, or ISO timestamp). */
-            expression: string;
-            /**
-             * Format: int32
-             * @description Consecutive-failure threshold before auto-pause.
-             */
-            failure_threshold: number;
-            /**
-             * Format: date-time
-             * @description One-shot fire timestamp. Present only for `fire_at` schedules; absent for recurring ones.
-             */
-            fire_at?: string | null;
-            /**
-             * Format: int64
-             * @description Total number of times this schedule has fired (scheduled + manual).
-             */
-            fire_count: number;
-            /** @description Human-readable summary of the schedule expression, e.g. `"At 09:00, Monday through Friday"`. */
-            human_readable: string;
-            /**
-             * Format: int32
-             * @description Random jitter in seconds applied to each fire time.
-             */
-            jitter_secs: number;
-            /** @description Error message from the most recent failed dispatch. Cleared on success. */
-            last_error?: string | null;
-            /**
-             * Format: date-time
-             * @description Timestamp of the most recent fire (scheduled or manual). Absent if never fired.
-             */
-            last_fired_at?: string | null;
-            /** @description Schedule name — the natural key. */
-            name: string;
-            /**
-             * Format: date-time
-             * @description Next scheduled fire time.
-             */
-            next_fire_at: string;
-            /** @description Projected next N fire times (UTC). Count is controlled by `QUEUE_SCHEDULE_PREVIEW_COUNT`. */
-            next_fires: string[];
-            /** @description Current status: `"active"` or `"paused"`. */
-            status: string;
-            /** @description Dispatch target. */
-            target: components["schemas"]["TargetSpec"];
-            /** @description IANA timezone used for cron evaluation. */
-            timezone: string;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        /**
-         * @description Partial spec for PATCH. All fields are optional; present fields replace the
-         *     existing value. Omitted fields are preserved. If any of `cron`, `every`,
-         *     `when`, or `fire_at` is provided, all four are replaced (they are mutually
-         *     exclusive).
-         *
-         *     To pause or resume a schedule, send `{"status": "paused"}` or
-         *     `{"status": "active"}` as the only field.
-         * @example {
-         *       "status": "paused"
-         *     }
-         */
-        SchedulePatch: {
-            /** @description Enable or disable catchup for missed fires. */
-            catchup?: boolean | null;
-            /**
-             * Format: int32
-             * @description Replacement catchup backfill limit.
-             */
-            catchup_limit?: number | null;
-            /** @description Replacement cron pattern. Mutually exclusive with `every`, `when`, `fire_at`. */
-            cron?: string | null;
-            /** @description Replacement interval shorthand, e.g. `"10m"`. Mutually exclusive. */
-            every?: string | null;
-            /**
-             * Format: int32
-             * @description Replacement consecutive-failure threshold before auto-pause.
-             */
-            failure_threshold?: number | null;
-            /**
-             * Format: date-time
-             * @description Replacement one-shot timestamp (must be in the future). Mutually exclusive.
-             */
-            fire_at?: string | null;
-            /**
-             * Format: int32
-             * @description Replacement jitter in seconds.
-             */
-            jitter_secs?: number | null;
-            /**
-             * @description Set to `"active"` to resume or `"paused"` to pause. When this is the
-             *     only field in the request, it takes an optimized fast path.
-             */
-            status?: string | null;
-            target?: null | components["schemas"]["TargetSpec"];
-            /** @description Replacement IANA timezone name for cron evaluation. */
-            timezone?: string | null;
-            /** @description Replacement natural-language expression. Mutually exclusive. */
-            when?: string | null;
-        };
-        /**
-         * @description Full schedule spec for create / upsert.
-         * @example {
-         *       "name": "daily-report",
-         *       "target": {
-         *         "message": {
-         *           "type": "daily_summary"
-         *         },
-         *         "queue": "reports"
-         *       },
-         *       "timezone": "America/New_York",
-         *       "when": "every weekday at 9am"
-         *     }
-         */
-        ScheduleSpec: {
-            /** @description If `true`, fire missed occurrences when the worker restarts after downtime (bounded by `catchup_limit`). Defaults to `false`. */
-            catchup?: boolean | null;
-            /**
-             * Format: int32
-             * @description Maximum number of missed fires to backfill in a single catchup pass. Defaults to `100`.
-             */
-            catchup_limit?: number | null;
-            /** @description Raw 5- or 6-field cron pattern, e.g. `"0 9 * * 1-5"`. Mutually exclusive with `every`, `when`, `fire_at`. */
-            cron?: string | null;
-            /** @description Fixed-interval shorthand: `"5m"`, `"30s"`, `"2h"`. Must evenly divide the next-larger unit. Mutually exclusive. */
-            every?: string | null;
-            /**
-             * Format: int32
-             * @description Number of consecutive dispatch failures before the schedule is auto-paused. Defaults to `3`.
-             */
-            failure_threshold?: number | null;
-            /**
-             * Format: date-time
-             * @description ISO-8601 one-shot fire timestamp. Must be in the future. The schedule row is deleted after firing. Mutually exclusive.
-             */
-            fire_at?: string | null;
-            /**
-             * Format: int32
-             * @description Random jitter in seconds added to each computed fire time to spread bursts. Defaults to `0`.
-             */
-            jitter_secs?: number | null;
-            /** @description Schedule name — 1–64 characters, `[a-z0-9_-]`. Used as the natural key for GET/PUT/PATCH/DELETE. */
-            name: string;
-            /** @description Dispatch target. Provide exactly one of the `queue`, `topic`, or `workflow` shapes. */
-            target: components["schemas"]["TargetSpec"];
-            /** @description IANA timezone name for cron evaluation, e.g. `"America/New_York"`. Defaults to `"UTC"`. Ignored for `fire_at`. */
-            timezone?: string | null;
-            /** @description Natural-language expression, e.g. `"every weekday at 9am"`. Converted to cron internally. Mutually exclusive. */
-            when?: string | null;
-        };
-        /**
-         * @description Request body for send — either a single message object or a JSON array for batch
-         *     sends. The shape is detected automatically: a JSON object is a single send, a JSON
-         *     array is a batch.
-         */
-        SendBody: components["schemas"]["SendRequest"] | components["schemas"]["SendRequest"][];
-        /** @description A single message to enqueue. */
-        SendRequest: {
-            /**
-             * Format: int32
-             * @description Delivery delay in seconds. The message becomes visible to receivers after this
-             *     many seconds. Default: `0` (immediately visible).
-             */
-            delay?: number;
-            /**
-             * @description FIFO group identifier. Messages with the same `group_id` are delivered in strict
-             *     enqueue order. Requires a FIFO queue. All messages in a batch must include a
-             *     `group_id` if any do.
-             */
-            group_id?: string | null;
-            /**
-             * @description Optional key-value metadata to attach to the message. Any JSON object. Delivered
-             *     alongside the body on receive.
-             */
-            headers: unknown;
-            /** @description Message body. Any JSON value: object, array, string, number, or boolean. */
-            message: unknown;
-        };
-        /**
-         * @description Send response — mirrors the request shape.
-         *     Single sends return `{ "id": <i64> }`;
-         *     batch sends return `{ "ids": [<i64>, ...] }`.
-         */
-        SendResponse: {
-            /**
-             * Format: int64
-             * @description Assigned message ID.
-             */
-            id: number;
-        } | {
-            /** @description Assigned message IDs, in the same order as the request array. */
-            ids: number[];
-        };
-        /**
-         * @description Request body to create an event subscription. Provide either `queue_name` (to route
-         *     into an internal queue) or `protocol` + `endpoint` (for HTTP/HTTPS webhook delivery).
-         *     The two forms are mutually exclusive.
-         */
-        SubscribeRequest: {
-            /** @description HTTP or HTTPS URL to POST the message to. Required when `protocol` is set. */
-            endpoint?: string | null;
-            /**
-             * @description When `true`, HTTP/HTTPS subscribers receive an SNS-compatible notification
-             *     envelope instead of the raw payload. Default: `false` (raw delivery).
-             */
-            envelope?: boolean;
-            /**
-             * @description Delivery protocol for webhook subscriptions. One of `"http"` or `"https"`.
-             *     Required when `queue_name` is absent. Mutually exclusive with `queue_name`.
-             */
-            protocol?: string | null;
-            /**
-             * @description Name of an existing queue to deliver matching messages to. Mutually exclusive
-             *     with `protocol` and `endpoint`.
-             */
-            queue_name?: string | null;
-        };
-        /**
-         * @description Dispatch target — provide exactly one of the three shapes. The presence of
-         *     `queue`, `topic`, or `workflow` determines which kind is used.
-         *
-         *     **Queue** — sends a single message to a named queue:
-         *     ```json
-         *     { "queue": "my-queue", "message": { "key": "value" } }
-         *     ```
-         *
-         *     **Topic** — fans the message out to every subscribed queue via a routing key:
-         *     ```json
-         *     { "topic": "events.order.created", "message": { "order_id": 42 } }
-         *     ```
-         *
-         *     **Workflow** — reserved; currently rejected with `400`. Will dispatch to a
-         *     named workflow when the workflow runtime ships.
-         */
-        TargetSpec: {
-            /** @description User-defined headers merged into the message. Must not contain the reserved key `_schedule`. */
-            headers?: unknown;
-            /** @description Message payload (any JSON value). */
-            message: unknown;
-            /** @description Name of the target queue. */
-            queue: string;
-        } | {
-            /** @description User-defined headers merged into each fanned-out message. Must not contain `_schedule`. */
-            headers?: unknown;
-            /** @description Message payload (any JSON value). */
-            message: unknown;
-            /** @description Routing key used for event fan-out (topic name). */
-            topic: string;
-        } | {
-            /** @description Input payload passed to the workflow on start. */
-            input: unknown;
-            /** @description Workflow identifier. Not yet supported. */
-            workflow: string;
-        };
-        /** @description A message enqueued in a single matched queue as a result of a topic publish. */
-        TopicMessage: {
-            /**
-             * Format: int64
-             * @description Assigned message ID within that queue.
-             */
-            msg_id: number;
-            /** @description Name of the queue that received the message. */
-            queue_name: string;
-        };
-        /** @description Request body for publishing a message to an event routing key. */
-        TopicSendRequest: {
-            /**
-             * Format: int32
-             * @description Delivery delay in seconds applied to each enqueued message. Default: `0`.
-             */
-            delay?: number;
-            /** @description Optional metadata to attach to each enqueued copy. Any JSON object. */
-            headers: unknown;
-            /** @description Message body to fan out to all matching queues and HTTP endpoints. Any JSON value. */
-            message: unknown;
-        };
-        /** @description Result of an event publish operation. */
-        TopicSendResponse: {
-            /** @description One entry per matched queue, containing the queue name and assigned message ID. */
-            messages: components["schemas"]["TopicMessage"][];
-            /**
-             * Format: int64
-             * @description Number of queues that matched the routing key and received a copy of the message.
-             */
-            queues_matched: number;
-        };
-        /** @description A topic subscription record. */
-        TopicSubscription: {
-            /**
-             * Format: date-time
-             * @description Timestamp when the subscription was created.
-             */
-            bound_at: string;
-            /**
-             * @description Delivery endpoint. `sqs://<queue_name>` for queue subscriptions; the HTTP/HTTPS URL
-             *     for webhook subscriptions.
-             */
-            endpoint: string;
-            /**
-             * Format: int64
-             * @description Subscription ID. Use this to unsubscribe via `DELETE /v1/events/{pattern}/subscriptions/{id}`.
-             */
-            id: number;
-            /** @description Glob pattern matched against routing keys at publish time. */
-            pattern: string;
-            /**
-             * @description Delivery protocol: `"sqs"` for internal queue delivery, `"http"` or `"https"` for
-             *     webhook delivery.
-             */
-            protocol: string;
-            /**
-             * @description Name of the target queue. Present only for `sqs` protocol subscriptions; `null` for
-             *     HTTP/HTTPS webhook subscriptions.
-             */
-            queue_name?: string | null;
-            /**
-             * @description `true` when the message payload is delivered as-is (raw); `false` when wrapped in an
-             *     SNS-compatible notification envelope.
-             */
-            raw_delivery: boolean;
-        };
+  schemas: {
+    /** @description Request body to extend or reduce a message's visibility timeout. */
+    ChangeVisibilityRequest: {
+      /**
+       * Format: int32
+       * @description New visibility timeout in seconds from now. The message will not be returned by
+       *     receive calls until this duration elapses. Set to `0` to make the message
+       *     immediately visible.
+       */
+      vt: number;
     };
-    responses: never;
-    parameters: never;
-    requestBodies: never;
-    headers: never;
-    pathItems: never;
+    /** @description Confirmation of a visibility timeout change. */
+    ChangeVisibilityResponse: {
+      /**
+       * Format: int64
+       * @description Message ID.
+       */
+      id: number;
+      /**
+       * Format: date-time
+       * @description Updated timestamp after which the message becomes visible again.
+       */
+      visible_at: string;
+    };
+    /** @description Request body for queue creation. */
+    CreateQueueRequest: {
+      /**
+       * @description When `true`, creates a FIFO queue: messages with the same `group_id` are delivered
+       *     in strict enqueue order. Default: `false` (standard queue, at-least-once unordered).
+       */
+      fifo?: boolean;
+      /**
+       * @description Queue name. Must be unique within the instance. Letters, digits, hyphens, and
+       *     underscores only.
+       */
+      name: string;
+    };
+    /** @description Request body for batch message deletion. */
+    DeleteBatchRequest: {
+      /** @description IDs of messages to delete. Non-existent IDs are silently skipped. */
+      ids: number[];
+    };
+    /** @description Result of a batch delete operation. */
+    DeletedResponse: {
+      /** @description IDs of the messages that were actually deleted. */
+      deleted: number[];
+    };
+    /** @description Inner error payload for all non-2xx responses. */
+    ErrorBody: {
+      /** @description Machine-readable error code, e.g. `"queue_not_found"`, `"bad_request"`. */
+      code: string;
+      /** @description Optional actionable guidance present on configuration-gate errors. */
+      hint?: string | null;
+      /** @description Human-readable description of the error. */
+      message: string;
+    };
+    /** @description Wire-format error envelope returned on all non-2xx responses. */
+    ErrorResponse: {
+      error: components["schemas"]["ErrorBody"];
+    };
+    /** @description A received message. */
+    MessageResponse: {
+      /**
+       * Format: date-time
+       * @description Timestamp when the message was added to the queue.
+       */
+      enqueued_at: string;
+      /** @description Metadata attached at send time. `null` when none was provided. */
+      headers: unknown;
+      /**
+       * Format: int64
+       * @description Message ID. Use this to delete or extend the visibility of the message.
+       */
+      id: number;
+      /** @description Message body as originally sent. */
+      message: unknown;
+      /**
+       * Format: int32
+       * @description How many times this message has been delivered. Starts at `1` on first delivery.
+       *     A value greater than `1` indicates a prior consumer did not delete the message
+       *     before its visibility timeout expired.
+       */
+      read_count: number;
+      /**
+       * Format: date-time
+       * @description Timestamp after which the message becomes visible again if not deleted. Extends
+       *     on each `PATCH /v1/queues/{name}/messages/{id}` call.
+       */
+      visible_at: string;
+    };
+    /**
+     * @description Preview returned by `POST /v1/previews` — the canonical form of a schedule
+     *     expression plus a projection of upcoming fire times. No schedule is created.
+     * @example {
+     *       "cron": "0 9 * * 1-5",
+     *       "human_readable": "At 09:00, Monday through Friday, America/New_York",
+     *       "next_fires": [
+     *         "2026-05-11T13:00:00Z",
+     *         "2026-05-12T13:00:00Z",
+     *         "2026-05-13T13:00:00Z"
+     *       ],
+     *       "timezone": "America/New_York"
+     *     }
+     */
+    Preview: {
+      /** @description Canonical cron pattern derived from the expression. Absent for one-shot `fire_at` inputs. */
+      cron?: string | null;
+      /**
+       * Format: date-time
+       * @description One-shot fire timestamp. Present only when the input was `fire_at`.
+       */
+      fire_at?: string | null;
+      /** @description Human-readable description of the schedule expression. */
+      human_readable: string;
+      /** @description Projected next N fire times in UTC. */
+      next_fires: string[];
+      /** @description IANA timezone used for projection (defaults to `"UTC"`). */
+      timezone: string;
+    };
+    /**
+     * @description Input for a dry-run preview. Provide exactly one of `cron`, `every`,
+     *     `when`, or `fire_at`. No schedule is created or modified.
+     * @example {
+     *       "timezone": "America/New_York",
+     *       "when": "every weekday at 9am"
+     *     }
+     */
+    PreviewSpec: {
+      /** @description Raw 5- or 6-field cron pattern. Mutually exclusive with `every`, `when`, `fire_at`. */
+      cron?: string | null;
+      /** @description Fixed-interval shorthand, e.g. `"5m"`. Mutually exclusive. */
+      every?: string | null;
+      /**
+       * Format: date-time
+       * @description One-shot ISO-8601 timestamp. Mutually exclusive.
+       */
+      fire_at?: string | null;
+      /** @description IANA timezone for cron evaluation. Defaults to `"UTC"`. */
+      timezone?: string | null;
+      /** @description Natural-language expression, e.g. `"every weekday at 9am"`. Mutually exclusive. */
+      when?: string | null;
+    };
+    /** @description Result of a purge operation. */
+    PurgeResponse: {
+      /**
+       * Format: int64
+       * @description Number of messages deleted from the queue.
+       */
+      deleted: number;
+    };
+    /** @description Real-time queue metrics. */
+    QueueMetricsResponse: {
+      /** @description Queue name. */
+      name: string;
+      /**
+       * Format: int64
+       * @description Age in seconds of the newest visible message. `null` when the queue is empty.
+       */
+      newest_msg_age_sec?: number | null;
+      /**
+       * Format: int64
+       * @description Age in seconds of the oldest visible message. `null` when the queue is empty.
+       */
+      oldest_msg_age_sec?: number | null;
+      /**
+       * Format: int64
+       * @description Number of messages currently visible (not hidden by a visibility timeout).
+       */
+      queue_length: number;
+      /**
+       * Format: date-time
+       * @description Timestamp when these metrics were sampled.
+       */
+      scrape_time: string;
+      /**
+       * Format: int64
+       * @description Total messages ever enqueued, including already-deleted ones.
+       */
+      total_messages: number;
+    };
+    /** @description Queue metadata returned by list operations. */
+    QueueResponse: {
+      /**
+       * Format: date-time
+       * @description Timestamp when the queue was created.
+       */
+      created_at: string;
+      /** @description `true` when the queue is backed by a partitioned table for high-throughput workloads. */
+      is_partitioned: boolean;
+      /**
+       * @description `true` when the queue uses an unlogged table — writes are faster but messages are
+       *     not crash-safe.
+       */
+      is_unlogged: boolean;
+      /** @description Queue name. */
+      name: string;
+    };
+    /**
+     * @description Result of a manual `POST /v1/schedules/{name}/runs`.
+     *     For queue targets `msg_ids` is a singleton; for topic targets it contains
+     *     one id per fanned-out subscriber queue.
+     * @example {
+     *       "fired_at": "2026-05-10T14:23:00Z",
+     *       "msg_ids": [
+     *         42
+     *       ],
+     *       "out_of_band": true,
+     *       "schedule_name": "daily-report",
+     *       "scheduled_for": "2026-05-10T14:23:00Z"
+     *     }
+     */
+    RunResult: {
+      /**
+       * Format: date-time
+       * @description Timestamp when the run was dispatched.
+       */
+      fired_at: string;
+      /** @description Message IDs produced. Singleton for queue targets; one per subscriber for topic targets. */
+      msg_ids: number[];
+      /** @description `true` for manual runs; `false` for worker-scheduled fires. */
+      out_of_band: boolean;
+      /** @description Name of the schedule that was run. */
+      schedule_name: string;
+      /**
+       * Format: date-time
+       * @description `fired_at` for manual runs; the due `next_fire_at` for scheduled runs.
+       */
+      scheduled_for: string;
+    };
+    /**
+     * @description A stored schedule, including derived `human_readable` description and
+     *     `next_fires` projection computed at response time.
+     * @example {
+     *       "catchup": false,
+     *       "catchup_limit": 100,
+     *       "consecutive_failures": 0,
+     *       "created_at": "2026-05-01T00:00:00Z",
+     *       "cron": "0 9 * * 1-5",
+     *       "expression": "every weekday at 9am",
+     *       "failure_threshold": 3,
+     *       "fire_count": 42,
+     *       "human_readable": "At 09:00, Monday through Friday, America/New_York",
+     *       "jitter_secs": 0,
+     *       "name": "daily-report",
+     *       "next_fire_at": "2026-05-12T13:00:00Z",
+     *       "next_fires": [
+     *         "2026-05-12T13:00:00Z",
+     *         "2026-05-13T13:00:00Z"
+     *       ],
+     *       "status": "active",
+     *       "target": {
+     *         "message": {
+     *           "type": "daily_summary"
+     *         },
+     *         "queue": "reports"
+     *       },
+     *       "timezone": "America/New_York",
+     *       "updated_at": "2026-05-01T00:00:00Z"
+     *     }
+     */
+    Schedule: {
+      /** @description Whether missed fires are backfilled on worker restart. */
+      catchup: boolean;
+      /**
+       * Format: int32
+       * @description Maximum backfill count per catchup pass.
+       */
+      catchup_limit: number;
+      /**
+       * Format: int32
+       * @description Number of consecutive failures since the last successful fire.
+       */
+      consecutive_failures: number;
+      /** Format: date-time */
+      created_at: string;
+      /** @description Canonical cron pattern stored in the database. Present for recurring schedules; absent for one-shots. */
+      cron?: string | null;
+      /** @description Original user-supplied expression string (cron pattern, interval, natural language, or ISO timestamp). */
+      expression: string;
+      /**
+       * Format: int32
+       * @description Consecutive-failure threshold before auto-pause.
+       */
+      failure_threshold: number;
+      /**
+       * Format: date-time
+       * @description One-shot fire timestamp. Present only for `fire_at` schedules; absent for recurring ones.
+       */
+      fire_at?: string | null;
+      /**
+       * Format: int64
+       * @description Total number of times this schedule has fired (scheduled + manual).
+       */
+      fire_count: number;
+      /** @description Human-readable summary of the schedule expression, e.g. `"At 09:00, Monday through Friday"`. */
+      human_readable: string;
+      /**
+       * Format: int32
+       * @description Random jitter in seconds applied to each fire time.
+       */
+      jitter_secs: number;
+      /** @description Error message from the most recent failed dispatch. Cleared on success. */
+      last_error?: string | null;
+      /**
+       * Format: date-time
+       * @description Timestamp of the most recent fire (scheduled or manual). Absent if never fired.
+       */
+      last_fired_at?: string | null;
+      /** @description Schedule name — the natural key. */
+      name: string;
+      /**
+       * Format: date-time
+       * @description Next scheduled fire time.
+       */
+      next_fire_at: string;
+      /** @description Projected next N fire times (UTC). Count is controlled by `QUEUE_SCHEDULE_PREVIEW_COUNT`. */
+      next_fires: string[];
+      /** @description Current status: `"active"` or `"paused"`. */
+      status: string;
+      /** @description Dispatch target. */
+      target: components["schemas"]["TargetSpec"];
+      /** @description IANA timezone used for cron evaluation. */
+      timezone: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    /**
+     * @description Partial spec for PATCH. All fields are optional; present fields replace the
+     *     existing value. Omitted fields are preserved. If any of `cron`, `every`,
+     *     `when`, or `fire_at` is provided, all four are replaced (they are mutually
+     *     exclusive).
+     *
+     *     To pause or resume a schedule, send `{"status": "paused"}` or
+     *     `{"status": "active"}` as the only field.
+     * @example {
+     *       "status": "paused"
+     *     }
+     */
+    SchedulePatch: {
+      /** @description Enable or disable catchup for missed fires. */
+      catchup?: boolean | null;
+      /**
+       * Format: int32
+       * @description Replacement catchup backfill limit.
+       */
+      catchup_limit?: number | null;
+      /** @description Replacement cron pattern. Mutually exclusive with `every`, `when`, `fire_at`. */
+      cron?: string | null;
+      /** @description Replacement interval shorthand, e.g. `"10m"`. Mutually exclusive. */
+      every?: string | null;
+      /**
+       * Format: int32
+       * @description Replacement consecutive-failure threshold before auto-pause.
+       */
+      failure_threshold?: number | null;
+      /**
+       * Format: date-time
+       * @description Replacement one-shot timestamp (must be in the future). Mutually exclusive.
+       */
+      fire_at?: string | null;
+      /**
+       * Format: int32
+       * @description Replacement jitter in seconds.
+       */
+      jitter_secs?: number | null;
+      /**
+       * @description Set to `"active"` to resume or `"paused"` to pause. When this is the
+       *     only field in the request, it takes an optimized fast path.
+       */
+      status?: string | null;
+      target?: null | components["schemas"]["TargetSpec"];
+      /** @description Replacement IANA timezone name for cron evaluation. */
+      timezone?: string | null;
+      /** @description Replacement natural-language expression. Mutually exclusive. */
+      when?: string | null;
+    };
+    /**
+     * @description Full schedule spec for create / upsert.
+     * @example {
+     *       "name": "daily-report",
+     *       "target": {
+     *         "message": {
+     *           "type": "daily_summary"
+     *         },
+     *         "queue": "reports"
+     *       },
+     *       "timezone": "America/New_York",
+     *       "when": "every weekday at 9am"
+     *     }
+     */
+    ScheduleSpec: {
+      /** @description If `true`, fire missed occurrences when the worker restarts after downtime (bounded by `catchup_limit`). Defaults to `false`. */
+      catchup?: boolean | null;
+      /**
+       * Format: int32
+       * @description Maximum number of missed fires to backfill in a single catchup pass. Defaults to `100`.
+       */
+      catchup_limit?: number | null;
+      /** @description Raw 5- or 6-field cron pattern, e.g. `"0 9 * * 1-5"`. Mutually exclusive with `every`, `when`, `fire_at`. */
+      cron?: string | null;
+      /** @description Fixed-interval shorthand: `"5m"`, `"30s"`, `"2h"`. Must evenly divide the next-larger unit. Mutually exclusive. */
+      every?: string | null;
+      /**
+       * Format: int32
+       * @description Number of consecutive dispatch failures before the schedule is auto-paused. Defaults to `3`.
+       */
+      failure_threshold?: number | null;
+      /**
+       * Format: date-time
+       * @description ISO-8601 one-shot fire timestamp. Must be in the future. The schedule row is deleted after firing. Mutually exclusive.
+       */
+      fire_at?: string | null;
+      /**
+       * Format: int32
+       * @description Random jitter in seconds added to each computed fire time to spread bursts. Defaults to `0`.
+       */
+      jitter_secs?: number | null;
+      /** @description Schedule name — 1–64 characters, `[a-z0-9_-]`. Used as the natural key for GET/PUT/PATCH/DELETE. */
+      name: string;
+      /** @description Dispatch target. Provide exactly one of the `queue`, `topic`, or `workflow` shapes. */
+      target: components["schemas"]["TargetSpec"];
+      /** @description IANA timezone name for cron evaluation, e.g. `"America/New_York"`. Defaults to `"UTC"`. Ignored for `fire_at`. */
+      timezone?: string | null;
+      /** @description Natural-language expression, e.g. `"every weekday at 9am"`. Converted to cron internally. Mutually exclusive. */
+      when?: string | null;
+    };
+    /**
+     * @description Request body for send — either a single message object or a JSON array for batch
+     *     sends. The shape is detected automatically: a JSON object is a single send, a JSON
+     *     array is a batch.
+     */
+    SendBody:
+      | components["schemas"]["SendRequest"]
+      | components["schemas"]["SendRequest"][];
+    /** @description A single message to enqueue. */
+    SendRequest: {
+      /**
+       * Format: int32
+       * @description Delivery delay in seconds. The message becomes visible to receivers after this
+       *     many seconds. Default: `0` (immediately visible).
+       */
+      delay?: number;
+      /**
+       * @description FIFO group identifier. Messages with the same `group_id` are delivered in strict
+       *     enqueue order. Requires a FIFO queue. All messages in a batch must include a
+       *     `group_id` if any do.
+       */
+      group_id?: string | null;
+      /**
+       * @description Optional key-value metadata to attach to the message. Any JSON object. Delivered
+       *     alongside the body on receive.
+       */
+      headers: unknown;
+      /** @description Message body. Any JSON value: object, array, string, number, or boolean. */
+      message: unknown;
+    };
+    /**
+     * @description Send response — mirrors the request shape.
+     *     Single sends return `{ "id": <i64> }`;
+     *     batch sends return `{ "ids": [<i64>, ...] }`.
+     */
+    SendResponse: {
+      /**
+       * Format: int64
+       * @description Assigned message ID.
+       */
+      id: number;
+    } | {
+      /** @description Assigned message IDs, in the same order as the request array. */
+      ids: number[];
+    };
+    /**
+     * @description Request body to create an event subscription. Provide either `queue_name` (to route
+     *     into an internal queue) or `protocol` + `endpoint` (for HTTP/HTTPS webhook delivery).
+     *     The two forms are mutually exclusive.
+     */
+    SubscribeRequest: {
+      /** @description HTTP or HTTPS URL to POST the message to. Required when `protocol` is set. */
+      endpoint?: string | null;
+      /**
+       * @description When `true`, HTTP/HTTPS subscribers receive an SNS-compatible notification
+       *     envelope instead of the raw payload. Default: `false` (raw delivery).
+       */
+      envelope?: boolean;
+      /**
+       * @description Delivery protocol for webhook subscriptions. One of `"http"` or `"https"`.
+       *     Required when `queue_name` is absent. Mutually exclusive with `queue_name`.
+       */
+      protocol?: string | null;
+      /**
+       * @description Name of an existing queue to deliver matching messages to. Mutually exclusive
+       *     with `protocol` and `endpoint`.
+       */
+      queue_name?: string | null;
+    };
+    /**
+     * @description Dispatch target — provide exactly one of the three shapes. The presence of
+     *     `queue`, `topic`, or `workflow` determines which kind is used.
+     *
+     *     **Queue** — sends a single message to a named queue:
+     *     ```json
+     *     { "queue": "my-queue", "message": { "key": "value" } }
+     *     ```
+     *
+     *     **Topic** — fans the message out to every subscribed queue via a routing key:
+     *     ```json
+     *     { "topic": "events.order.created", "message": { "order_id": 42 } }
+     *     ```
+     *
+     *     **Workflow** — reserved; currently rejected with `400`. Will dispatch to a
+     *     named workflow when the workflow runtime ships.
+     */
+    TargetSpec: {
+      /** @description User-defined headers merged into the message. Must not contain the reserved key `_schedule`. */
+      headers?: unknown;
+      /** @description Message payload (any JSON value). */
+      message: unknown;
+      /** @description Name of the target queue. */
+      queue: string;
+    } | {
+      /** @description User-defined headers merged into each fanned-out message. Must not contain `_schedule`. */
+      headers?: unknown;
+      /** @description Message payload (any JSON value). */
+      message: unknown;
+      /** @description Routing key used for event fan-out (topic name). */
+      topic: string;
+    } | {
+      /** @description Input payload passed to the workflow on start. */
+      input: unknown;
+      /** @description Workflow identifier. Not yet supported. */
+      workflow: string;
+    };
+    /** @description A message enqueued in a single matched queue as a result of a topic publish. */
+    TopicMessage: {
+      /**
+       * Format: int64
+       * @description Assigned message ID within that queue.
+       */
+      msg_id: number;
+      /** @description Name of the queue that received the message. */
+      queue_name: string;
+    };
+    /** @description Request body for publishing a message to an event routing key. */
+    TopicSendRequest: {
+      /**
+       * Format: int32
+       * @description Delivery delay in seconds applied to each enqueued message. Default: `0`.
+       */
+      delay?: number;
+      /** @description Optional metadata to attach to each enqueued copy. Any JSON object. */
+      headers: unknown;
+      /** @description Message body to fan out to all matching queues and HTTP endpoints. Any JSON value. */
+      message: unknown;
+    };
+    /** @description Result of an event publish operation. */
+    TopicSendResponse: {
+      /** @description One entry per matched queue, containing the queue name and assigned message ID. */
+      messages: components["schemas"]["TopicMessage"][];
+      /**
+       * Format: int64
+       * @description Number of queues that matched the routing key and received a copy of the message.
+       */
+      queues_matched: number;
+    };
+    /** @description A topic subscription record. */
+    TopicSubscription: {
+      /**
+       * Format: date-time
+       * @description Timestamp when the subscription was created.
+       */
+      bound_at: string;
+      /**
+       * @description Delivery endpoint. `sqs://<queue_name>` for queue subscriptions; the HTTP/HTTPS URL
+       *     for webhook subscriptions.
+       */
+      endpoint: string;
+      /**
+       * Format: int64
+       * @description Subscription ID. Use this to unsubscribe via `DELETE /v1/events/{pattern}/subscriptions/{id}`.
+       */
+      id: number;
+      /** @description Glob pattern matched against routing keys at publish time. */
+      pattern: string;
+      /**
+       * @description Delivery protocol: `"sqs"` for internal queue delivery, `"http"` or `"https"` for
+       *     webhook delivery.
+       */
+      protocol: string;
+      /**
+       * @description Name of the target queue. Present only for `sqs` protocol subscriptions; `null` for
+       *     HTTP/HTTPS webhook subscriptions.
+       */
+      queue_name?: string | null;
+      /**
+       * @description `true` when the message payload is delivered as-is (raw); `false` when wrapped in an
+       *     SNS-compatible notification envelope.
+       */
+      raw_delivery: boolean;
+    };
+  };
+  responses: never;
+  parameters: never;
+  requestBodies: never;
+  headers: never;
+  pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    list_event_subscriptions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Exact event pattern to look up. */
-                pattern: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Subscriptions for this pattern. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TopicSubscription"][];
-                };
-            };
-        };
+  list_event_subscriptions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Exact event pattern to look up. */
+        pattern: string;
+      };
+      cookie?: never;
     };
-    subscribe: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Glob pattern matched against routing keys at publish time (e.g. `payments.*`, `**` to match all events). */
-                pattern: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Subscriptions for this pattern. */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubscribeRequest"];
-            };
+        content: {
+          "application/json": components["schemas"]["TopicSubscription"][];
         };
-        responses: {
-            /** @description Subscription created. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TopicSubscription"];
-                };
-            };
-            /** @description Invalid parameters or conflicting options. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+      };
     };
-    unsubscribe: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Event pattern (for URL structure; the subscription ID alone uniquely identifies the record). */
-                pattern: string;
-                /** @description Subscription ID returned by subscribe. */
-                id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Subscription removed. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Subscription does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  subscribe: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Glob pattern matched against routing keys at publish time (e.g. `payments.*`, `**` to match all events). */
+        pattern: string;
+      };
+      cookie?: never;
     };
-    publish_event: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Routing key matched against subscription patterns using glob syntax (e.g. `payments.created`, `orders.*`). */
-                routing_key: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TopicSendRequest"];
-            };
-        };
-        responses: {
-            /** @description Message published. Returns the matched queue count and per-queue message IDs. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TopicSendResponse"];
-                };
-            };
-            /** @description No subscriptions match the routing key. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SubscribeRequest"];
+      };
     };
-    preview_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Subscription created. */
+      201: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PreviewSpec"];
-            };
+        content: {
+          "application/json": components["schemas"]["TopicSubscription"];
         };
-        responses: {
-            /** @description Preview computed successfully. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Preview"];
-                };
-            };
-            /** @description Invalid expression — bad cron pattern, unknown timezone, invalid interval, or unparseable natural language. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+      };
+      /** @description Invalid parameters or conflicting options. */
+      400: {
+        headers: {
+          [name: string]: unknown;
         };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
     };
-    list_queues: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description All queues, ordered by name. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QueueResponse"][];
-                };
-            };
-        };
+  };
+  unsubscribe: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Event pattern (for URL structure; the subscription ID alone uniquely identifies the record). */
+        pattern: string;
+        /** @description Subscription ID returned by subscribe. */
+        id: number;
+      };
+      cookie?: never;
     };
-    create_queue: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Subscription removed. */
+      204: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateQueueRequest"];
-            };
+        content?: never;
+      };
+      /** @description Subscription does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
         };
-        responses: {
-            /** @description Queue created. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid queue name or parameters. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
         };
+      };
     };
-    get_queue: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current queue metrics. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QueueMetricsResponse"];
-                };
-            };
-            /** @description Queue does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  publish_event: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Routing key matched against subscription patterns using glob syntax (e.g. `payments.created`, `orders.*`). */
+        routing_key: string;
+      };
+      cookie?: never;
     };
-    delete_queue: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Queue deleted. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Queue does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TopicSendRequest"];
+      };
     };
-    receive_messages: {
-        parameters: {
-            query?: {
-                /** @description Maximum number of messages to return. Default: 1. */
-                max?: number;
-                /**
-                 * @description Long-poll wait time in seconds. The call blocks until a message arrives or the
-                 *     timeout elapses. Default: 0 (no wait — returns immediately).
-                 */
-                wait?: number;
-                /**
-                 * @description Visibility timeout in seconds. Received messages are hidden from other consumers
-                 *     for this duration. Delete the message before it elapses to prevent re-delivery.
-                 *     Default: 30.
-                 */
-                vt?: number;
-                /**
-                 * @description Return messages in FIFO order within each `group_id`. Only applies to FIFO
-                 *     queues. Default: false.
-                 */
-                fifo?: boolean;
-            };
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-            };
-            cookie?: never;
+    responses: {
+      /** @description Message published. Returns the matched queue count and per-queue message IDs. */
+      201: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Up to `max` messages. Empty array when the queue is empty or the long-poll wait expires. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MessageResponse"][];
-                };
-            };
-            /** @description Queue does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["TopicSendResponse"];
         };
+      };
+      /** @description No subscriptions match the routing key. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
     };
-    send_messages: {
-        parameters: {
-            query?: {
-                /**
-                 * @description Skip WAL fsync on commit. Improves throughput at the cost of durability:
-                 *     messages can be lost on a PostgreSQL crash. Default: false (durable).
-                 */
-                async_commit?: boolean;
-            };
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SendBody"];
-            };
-        };
-        responses: {
-            /** @description Message(s) enqueued. Single send returns `{"id": <n>}`; batch send returns `{"ids": [...]}`. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SendResponse"];
-                };
-            };
-            /** @description Invalid request body or parameters. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Queue does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  preview_schedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    delete_batch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DeleteBatchRequest"];
-            };
-        };
-        responses: {
-            /** @description IDs of messages that were deleted. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeletedResponse"];
-                };
-            };
-            /** @description Queue does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PreviewSpec"];
+      };
     };
-    delete_message: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-                /** @description Message ID returned by send or receive. */
-                id: number;
-            };
-            cookie?: never;
+    responses: {
+      /** @description Preview computed successfully. */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Message deleted. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Message does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["Preview"];
         };
+      };
+      /** @description Invalid expression — bad cron pattern, unknown timezone, invalid interval, or unparseable natural language. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
     };
-    change_visibility: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-                /** @description Message ID returned by receive. */
-                id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChangeVisibilityRequest"];
-            };
-        };
-        responses: {
-            /** @description Updated visibility window. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChangeVisibilityResponse"];
-                };
-            };
-            /** @description Message does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  list_queues: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    purge_queue: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description All queues, ordered by name. */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Number of messages deleted. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PurgeResponse"];
-                };
-            };
-            /** @description Queue does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["QueueResponse"][];
         };
+      };
     };
-    list_queue_subscriptions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Queue name. */
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Active topic subscriptions for the queue. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TopicSubscription"][];
-                };
-            };
-            /** @description Queue does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  create_queue: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    list_schedules: {
-        parameters: {
-            query?: {
-                /**
-                 * @description Filter by status. `active` returns only firing schedules; `paused` returns only paused ones.
-                 * @example active
-                 */
-                status?: string | null;
-                /**
-                 * @description Filter by dispatch target kind: `queue`, `topic`, or `workflow`.
-                 * @example queue
-                 */
-                target_kind?: string | null;
-                /**
-                 * @description Return only schedules whose name starts with this prefix.
-                 * @example daily-
-                 */
-                name_prefix?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Schedules. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Schedule"][];
-                };
-            };
-        };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateQueueRequest"];
+      };
     };
-    create_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Queue created. */
+      201: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleSpec"];
-            };
+        content?: never;
+      };
+      /** @description Invalid queue name or parameters. */
+      400: {
+        headers: {
+          [name: string]: unknown;
         };
-        responses: {
-            /** @description Schedule created. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Schedule"];
-                };
-            };
-            /** @description Invalid spec — bad expression, unknown timezone, unsupported target kind. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Schedule name already exists. Use PUT to upsert. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
         };
+      };
     };
-    get_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Schedule. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Schedule"];
-                };
-            };
-            /** @description Schedule does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  get_queue: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+      };
+      cookie?: never;
     };
-    upsert_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Current queue metrics. */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleSpec"];
-            };
+        content: {
+          "application/json": components["schemas"]["QueueMetricsResponse"];
         };
-        responses: {
-            /** @description Schedule updated. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Schedule"];
-                };
-            };
-            /** @description Schedule created. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Schedule"];
-                };
-            };
-            /** @description Invalid spec — bad expression, unknown timezone, unsupported target kind. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+      };
+      /** @description Queue does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
         };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
     };
-    delete_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Deleted (or was already absent). */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
+  };
+  delete_queue: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+      };
+      cookie?: never;
     };
-    patch_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Queue deleted. */
+      204: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SchedulePatch"];
-            };
+        content?: never;
+      };
+      /** @description Queue does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
         };
-        responses: {
-            /** @description Schedule updated. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Schedule"];
-                };
-            };
-            /** @description Invalid patch — bad expression, unknown timezone, unsupported target kind. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Schedule does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
         };
+      };
     };
-    run_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Run accepted. Message(s) dispatched. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunResult"];
-                };
-            };
-            /** @description Schedule does not exist. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  receive_messages: {
+    parameters: {
+      query?: {
+        /** @description Maximum number of messages to return. Default: 1. */
+        max?: number;
+        /**
+         * @description Long-poll wait time in seconds. The call blocks until a message arrives or the
+         *     timeout elapses. Default: 0 (no wait — returns immediately).
+         */
+        wait?: number;
+        /**
+         * @description Visibility timeout in seconds. Received messages are hidden from other consumers
+         *     for this duration. Delete the message before it elapses to prevent re-delivery.
+         *     Default: 30.
+         */
+        vt?: number;
+        /**
+         * @description Return messages in FIFO order within each `group_id`. Only applies to FIFO
+         *     queues. Default: false.
+         */
+        fifo?: boolean;
+      };
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+      };
+      cookie?: never;
     };
+    requestBody?: never;
+    responses: {
+      /** @description Up to `max` messages. Empty array when the queue is empty or the long-poll wait expires. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MessageResponse"][];
+        };
+      };
+      /** @description Queue does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  send_messages: {
+    parameters: {
+      query?: {
+        /**
+         * @description Skip WAL fsync on commit. Improves throughput at the cost of durability:
+         *     messages can be lost on a PostgreSQL crash. Default: false (durable).
+         */
+        async_commit?: boolean;
+      };
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SendBody"];
+      };
+    };
+    responses: {
+      /** @description Message(s) enqueued. Single send returns `{"id": <n>}`; batch send returns `{"ids": [...]}`. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SendResponse"];
+        };
+      };
+      /** @description Invalid request body or parameters. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Queue does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  delete_batch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DeleteBatchRequest"];
+      };
+    };
+    responses: {
+      /** @description IDs of messages that were deleted. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DeletedResponse"];
+        };
+      };
+      /** @description Queue does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  delete_message: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+        /** @description Message ID returned by send or receive. */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Message deleted. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Message does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  change_visibility: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+        /** @description Message ID returned by receive. */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChangeVisibilityRequest"];
+      };
+    };
+    responses: {
+      /** @description Updated visibility window. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ChangeVisibilityResponse"];
+        };
+      };
+      /** @description Message does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  purge_queue: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Number of messages deleted. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PurgeResponse"];
+        };
+      };
+      /** @description Queue does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  list_queue_subscriptions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Queue name. */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Active topic subscriptions for the queue. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TopicSubscription"][];
+        };
+      };
+      /** @description Queue does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  list_schedules: {
+    parameters: {
+      query?: {
+        /**
+         * @description Filter by status. `active` returns only firing schedules; `paused` returns only paused ones.
+         * @example active
+         */
+        status?: string | null;
+        /**
+         * @description Filter by dispatch target kind: `queue`, `topic`, or `workflow`.
+         * @example queue
+         */
+        target_kind?: string | null;
+        /**
+         * @description Return only schedules whose name starts with this prefix.
+         * @example daily-
+         */
+        name_prefix?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Schedules. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Schedule"][];
+        };
+      };
+    };
+  };
+  create_schedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ScheduleSpec"];
+      };
+    };
+    responses: {
+      /** @description Schedule created. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Schedule"];
+        };
+      };
+      /** @description Invalid spec — bad expression, unknown timezone, unsupported target kind. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Schedule name already exists. Use PUT to upsert. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  get_schedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Schedule. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Schedule"];
+        };
+      };
+      /** @description Schedule does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  upsert_schedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ScheduleSpec"];
+      };
+    };
+    responses: {
+      /** @description Schedule updated. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Schedule"];
+        };
+      };
+      /** @description Schedule created. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Schedule"];
+        };
+      };
+      /** @description Invalid spec — bad expression, unknown timezone, unsupported target kind. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  delete_schedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Deleted (or was already absent). */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  patch_schedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SchedulePatch"];
+      };
+    };
+    responses: {
+      /** @description Schedule updated. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Schedule"];
+        };
+      };
+      /** @description Invalid patch — bad expression, unknown timezone, unsupported target kind. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Schedule does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  run_schedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Run accepted. Message(s) dispatched. */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunResult"];
+        };
+      };
+      /** @description Schedule does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
 }
