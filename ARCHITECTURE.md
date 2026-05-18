@@ -175,7 +175,7 @@ SNS supports the same two wire formats as SQS (JSON and Query/form-encoded). Res
   "Timestamp": "2024-01-01T00:00:00.000Z",
   "SignatureVersion": "2",
   "Signature": "<RSA-SHA256 base64>",
-  "SigningCertURL": "http://{BASE_URL}/SimpleNotificationService.pem"
+  "SigningCertURL": "http://{QUEUE_BASE_URL}/SimpleNotificationService.pem"
 }
 ```
 
@@ -205,9 +205,9 @@ Bindings are stored in `queue.topic_subscriptions` with columns `protocol`, `end
 
 ### Schedules (time-based triggers)
 
-`queue.schedule` is a single table indexed by `(next_fire_at) WHERE status = 'active'`. The scheduler worker (`src/ops/schedule_worker.rs`) polls it every `SCHEDULE_POLL_MS` (default 1000ms):
+`queue.schedule` is a single table indexed by `(next_fire_at) WHERE status = 'active'`. The scheduler worker (`src/ops/schedule_worker.rs`) polls it every `QUEUE_SCHEDULE_POLL_MS` (default 1000ms):
 
-1. Open transaction, claim up to `SCHEDULE_BATCH_SIZE` due rows with `FOR UPDATE SKIP LOCKED ORDER BY next_fire_at`.
+1. Open transaction, claim up to `QUEUE_SCHEDULE_BATCH_SIZE` due rows with `FOR UPDATE SKIP LOCKED ORDER BY next_fire_at`.
 2. For each row, open a `SAVEPOINT`, then dispatch by `target_kind`:
    - `queue` → `SELECT queue.send(...)` — XactCallback wakes receivers on commit.
    - `topic` → `SELECT queue.publish_event(...)` — fan-out to all matching subscribers.
@@ -224,7 +224,7 @@ The worker is always on and trivially cheap when idle: an empty partial index pr
 
 ### Write coalescer
 
-When `LINGER_MS > 0`, non-FIFO sends are routed through a background coalescing task (`src/ops/coalesce.rs`) instead of writing to the database directly.
+When `QUEUE_LINGER_MS > 0`, non-FIFO sends are routed through a background coalescing task (`src/ops/coalesce.rs`) instead of writing to the database directly.
 
 Each send submits a `PendingMessage` to an `mpsc::channel` (capacity 16 384) and awaits a `oneshot` reply with the assigned `msg_id`. The background task:
 
@@ -236,7 +236,7 @@ Each send submits a `PendingMessage` to an `mpsc::channel` (capacity 16 384) and
 
 `sync_commit=false` (async commit opt-out) is honoured only when **every** message in the group requests it; a single `sync_commit=true` member forces synchronous commit for the whole batch.
 
-Tradeoff: up to `LINGER_MS` added tail latency per message; messages in-flight in the channel are lost on crash (same risk as any in-flight HTTP request). Default `LINGER_MS=0` disables coalescing entirely.
+Tradeoff: up to `QUEUE_LINGER_MS` added tail latency per message; messages in-flight in the channel are lost on crash (same risk as any in-flight HTTP request). Default `QUEUE_LINGER_MS=0` disables coalescing entirely.
 
 ### Queue name validation
 
@@ -289,27 +289,27 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 
 ## Configuration
 
-| Variable                     | Default                 | What It Controls                                                                                                                 |
-| ---------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`               | (required)              | PostgreSQL connection string passed to sqlx `PgPoolOptions`.                                                                     |
-| `ADDRESS`                    | `0.0.0.0:9324`          | TCP bind address for the HTTP server.                                                                                            |
-| `DEFAULT_VISIBILITY_TIMEOUT` | `30`                    | Seconds applied when a `ReceiveMessage` request omits `VisibilityTimeout`.                                                       |
-| `MAX_CONNECTIONS`            | `10`                    | Hard cap on the sqlx connection pool. Excess operations wait for a free slot.                                                    |
-| `LOG_LEVEL`                  | `info`                  | `EnvFilter` directive (e.g. `beyond_queue=debug,info`). JSON-structured output.                                                  |
-| `OTLP_ENABLED`               | `false`                 | Enable OpenTelemetry OTLP trace export over gRPC.                                                                                |
-| `OTLP_ENDPOINT`              | `http://localhost:4317` | gRPC OTLP collector. Used when `OTLP_ENABLED=true`.                                                                              |
-| `OTLP_SAMPLE_RATE`           | `0.1`                   | Fraction of traces sampled (0.0 = never, 1.0 = always). Only effective when `OTLP_ENABLED=true`.                                 |
-| `LINGER_MS`                  | `0`                     | Write coalescer window (ms). Non-FIFO sends are held up to this duration and flushed as a single batch. `0` disables coalescing. |
-| `BASE_URL`                   | `http://{ADDRESS}`      | Base URL for SQS queue URLs returned to clients (`{BASE_URL}/000000000000/{name}`). Override when behind a proxy.                |
-| `HTTP_DELIVERY_ENABLED`      | `true`                  | Enable the background HTTP/HTTPS delivery worker.                                                                                |
-| `HTTP_DELIVERY_POLL_MS`      | `1000`                  | Delivery worker poll interval (ms). Lower values increase responsiveness at the cost of idle DB load.                            |
-| `HTTP_DELIVERY_TIMEOUT_SECS` | `5`                     | Per-request timeout for outbound webhook POSTs.                                                                                  |
-| `HTTP_DELIVERY_BATCH_SIZE`   | `50`                    | Maximum rows the delivery worker claims per poll cycle. Tune up under high SNS fanout load.                                      |
-| `SCHEDULE_ENABLED`           | `true`                  | Enable the background schedule worker (cron / every / when triggers).                                                            |
-| `SCHEDULE_POLL_MS`           | `1000`                  | Schedule worker poll interval (ms). Floor on fire latency; idle cost is one sub-millisecond partial-index probe per cycle.       |
-| `SCHEDULE_BATCH_SIZE`        | `32`                    | Maximum rows the schedule worker claims per poll cycle.                                                                          |
-| `SCHEDULE_PREVIEW_COUNT`     | `5`                     | Number of upcoming fire timestamps projected in `next_fires` on schedule and preview responses.                                  |
-| `SCHEDULE_LIST_MAX`          | `1000`                  | Hard cap on `GET /v1/schedules` response size.                                                                                   |
+| Variable                           | Default                  | What It Controls                                                                                                                 |
+| ---------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                     | (required)               | PostgreSQL connection string passed to sqlx `PgPoolOptions`.                                                                     |
+| `QUEUE_ADDRESS`                    | `0.0.0.0:9324`           | TCP bind address for the HTTP server.                                                                                            |
+| `QUEUE_DEFAULT_VISIBILITY_TIMEOUT` | `30`                     | Seconds applied when a `ReceiveMessage` request omits `VisibilityTimeout`.                                                       |
+| `QUEUE_MAX_CONNECTIONS`            | `10`                     | Hard cap on the sqlx connection pool. Excess operations wait for a free slot.                                                    |
+| `LOG_LEVEL`                        | `info`                   | `EnvFilter` directive (e.g. `beyond_queue=debug,info`). JSON-structured output.                                                  |
+| `OTLP_ENABLED`                     | `false`                  | Enable OpenTelemetry OTLP trace export over gRPC.                                                                                |
+| `OTLP_ENDPOINT`                    | `http://localhost:4317`  | gRPC OTLP collector. Used when `OTLP_ENABLED=true`.                                                                              |
+| `OTLP_SAMPLE_RATE`                 | `0.1`                    | Fraction of traces sampled (0.0 = never, 1.0 = always). Only effective when `OTLP_ENABLED=true`.                                 |
+| `QUEUE_LINGER_MS`                  | `0`                      | Write coalescer window (ms). Non-FIFO sends are held up to this duration and flushed as a single batch. `0` disables coalescing. |
+| `QUEUE_BASE_URL`                   | `http://{QUEUE_ADDRESS}` | Base URL for SQS queue URLs returned to clients (`{QUEUE_BASE_URL}/000000000000/{name}`). Override when behind a proxy.          |
+| `QUEUE_HTTP_DELIVERY_ENABLED`      | `true`                   | Enable the background HTTP/HTTPS delivery worker.                                                                                |
+| `QUEUE_HTTP_DELIVERY_POLL_MS`      | `1000`                   | Delivery worker poll interval (ms). Lower values increase responsiveness at the cost of idle DB load.                            |
+| `QUEUE_HTTP_DELIVERY_TIMEOUT_SECS` | `5`                      | Per-request timeout for outbound webhook POSTs.                                                                                  |
+| `QUEUE_HTTP_DELIVERY_BATCH_SIZE`   | `50`                     | Maximum rows the delivery worker claims per poll cycle. Tune up under high SNS fanout load.                                      |
+| `QUEUE_SCHEDULE_ENABLED`           | `true`                   | Enable the background schedule worker (cron / every / when triggers).                                                            |
+| `QUEUE_SCHEDULE_POLL_MS`           | `1000`                   | Schedule worker poll interval (ms). Floor on fire latency; idle cost is one sub-millisecond partial-index probe per cycle.       |
+| `QUEUE_SCHEDULE_BATCH_SIZE`        | `32`                     | Maximum rows the schedule worker claims per poll cycle.                                                                          |
+| `QUEUE_SCHEDULE_PREVIEW_COUNT`     | `5`                      | Number of upcoming fire timestamps projected in `next_fires` on schedule and preview responses.                                  |
+| `QUEUE_SCHEDULE_LIST_MAX`          | `1000`                   | Hard cap on `GET /v1/schedules` response size.                                                                                   |
 
 ---
 
@@ -351,22 +351,22 @@ When `OTLP_ENABLED=true`, spans are exported to the configured gRPC collector. I
 
 ## Failure Modes
 
-| Failure                                          | What Actually Happens                                                                                                                                                                               | Recovery                                                                                                                   |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Consumer crashes before deleting message         | Message stays in `queue.q_{name}` with vt in the future. When vt expires, next read returns it again.                                                                                               | None needed — automatic re-delivery. `read_ct` increments on each delivery.                                                |
-| PostgreSQL connection pool exhausted             | sqlx returns `PoolTimedOut`; handler returns 500 with `{"error": "Database error"}`.                                                                                                                | Client retries. Pool clears as in-flight connections finish.                                                               |
-| PostgreSQL unavailable at startup                | `db::connect` fails; process exits non-zero.                                                                                                                                                        | Restart the process once PostgreSQL is available.                                                                          |
-| PostgreSQL unavailable mid-flight                | sqlx returns an error; handler returns 500.                                                                                                                                                         | Client retries. Pool reconnects on next use.                                                                               |
-| Extension not in `shared_preload_libraries`      | `WaiterRegistry` not initialized; `receive` falls back to `WL_TIMEOUT` polling at `poll_interval_ms`.                                                                                               | Functional but higher read latency. Fix by adding the extension to `shared_preload_libraries`.                             |
-| Postmaster death during `WaitLatch`              | `WL_EXIT_ON_PM_DEATH` triggers; backend exits.                                                                                                                                                      | PostgreSQL restarts the backend on next connection.                                                                        |
-| Queue name injection attempt                     | `validate_name` in pgrx raises PostgreSQL ERROR (`pgrx::error!()`).                                                                                                                                 | Caught by the `match $handler(…).await` macro arm; returned as 400/InternalError to client.                                |
-| Mismatched headers array in `send_batch`         | pgrx raises PostgreSQL ERROR comparing array lengths before insert.                                                                                                                                 | Client receives 500. No partial insert.                                                                                    |
-| HTTP endpoint returns non-2xx                    | Delivery worker increments `attempt`, sets `next_attempt_at = now + backoff`. Row stays in `http_deliveries`.                                                                                       | Worker retries after backoff (10s/30s/60s/300s). After `max_attempts` (5), row stays as dead-letter for inspection.        |
-| HTTP endpoint unreachable / timeout              | Same as non-2xx: recorded as failure, retried with backoff.                                                                                                                                         | Same retry path. `last_error` column stores the error string.                                                              |
-| Delivery worker restart mid-batch                | Transaction rolls back; rows revert to pending state (next_attempt_at unchanged).                                                                                                                   | Worker picks them up again on next poll. `FOR UPDATE SKIP LOCKED` prevents double-delivery across concurrent workers.      |
-| Process killed while coalescer has pending sends | Messages in the `mpsc` channel are lost (not yet written to DB).                                                                                                                                    | Same as losing any in-flight HTTP request — client must retry. `LINGER_MS=0` eliminates this risk at the cost of batching. |
-| SIGTERM received                                 | `shutdown_signal()` resolves; axum stops accepting new connections and drains in-flight requests. Coalescer drains with a 10s deadline; delivery worker aborts (abort-safe via lease-based design). | Graceful — no messages lost for in-flight DB ops.                                                                          |
-| HTTP request exceeds 30s                         | `TimeoutLayer` returns 408 Request Timeout. DB query may still complete; client should retry with idempotency.                                                                                      | Client retries.                                                                                                            |
+| Failure                                          | What Actually Happens                                                                                                                                                                               | Recovery                                                                                                                         |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Consumer crashes before deleting message         | Message stays in `queue.q_{name}` with vt in the future. When vt expires, next read returns it again.                                                                                               | None needed — automatic re-delivery. `read_ct` increments on each delivery.                                                      |
+| PostgreSQL connection pool exhausted             | sqlx returns `PoolTimedOut`; handler returns 500 with `{"error": "Database error"}`.                                                                                                                | Client retries. Pool clears as in-flight connections finish.                                                                     |
+| PostgreSQL unavailable at startup                | `db::connect` fails; process exits non-zero.                                                                                                                                                        | Restart the process once PostgreSQL is available.                                                                                |
+| PostgreSQL unavailable mid-flight                | sqlx returns an error; handler returns 500.                                                                                                                                                         | Client retries. Pool reconnects on next use.                                                                                     |
+| Extension not in `shared_preload_libraries`      | `WaiterRegistry` not initialized; `receive` falls back to `WL_TIMEOUT` polling at `poll_interval_ms`.                                                                                               | Functional but higher read latency. Fix by adding the extension to `shared_preload_libraries`.                                   |
+| Postmaster death during `WaitLatch`              | `WL_EXIT_ON_PM_DEATH` triggers; backend exits.                                                                                                                                                      | PostgreSQL restarts the backend on next connection.                                                                              |
+| Queue name injection attempt                     | `validate_name` in pgrx raises PostgreSQL ERROR (`pgrx::error!()`).                                                                                                                                 | Caught by the `match $handler(…).await` macro arm; returned as 400/InternalError to client.                                      |
+| Mismatched headers array in `send_batch`         | pgrx raises PostgreSQL ERROR comparing array lengths before insert.                                                                                                                                 | Client receives 500. No partial insert.                                                                                          |
+| HTTP endpoint returns non-2xx                    | Delivery worker increments `attempt`, sets `next_attempt_at = now + backoff`. Row stays in `http_deliveries`.                                                                                       | Worker retries after backoff (10s/30s/60s/300s). After `max_attempts` (5), row stays as dead-letter for inspection.              |
+| HTTP endpoint unreachable / timeout              | Same as non-2xx: recorded as failure, retried with backoff.                                                                                                                                         | Same retry path. `last_error` column stores the error string.                                                                    |
+| Delivery worker restart mid-batch                | Transaction rolls back; rows revert to pending state (next_attempt_at unchanged).                                                                                                                   | Worker picks them up again on next poll. `FOR UPDATE SKIP LOCKED` prevents double-delivery across concurrent workers.            |
+| Process killed while coalescer has pending sends | Messages in the `mpsc` channel are lost (not yet written to DB).                                                                                                                                    | Same as losing any in-flight HTTP request — client must retry. `QUEUE_LINGER_MS=0` eliminates this risk at the cost of batching. |
+| SIGTERM received                                 | `shutdown_signal()` resolves; axum stops accepting new connections and drains in-flight requests. Coalescer drains with a 10s deadline; delivery worker aborts (abort-safe via lease-based design). | Graceful — no messages lost for in-flight DB ops.                                                                                |
+| HTTP request exceeds 30s                         | `TimeoutLayer` returns 408 Request Timeout. DB query may still complete; client should retry with idempotency.                                                                                      | Client retries.                                                                                                                  |
 
 ---
 
@@ -388,7 +388,7 @@ When `OTLP_ENABLED=true`, spans are exported to the configured gRPC collector. I
 | `src/ops/visibility.rs`                 | `queue.change_visibility` — change visibility timeout by msg_id.                                                                                                                                                                                                                                                                            |
 | `src/ops/queue_admin.rs`                | `queue.create`, `queue.create_fifo`, `queue.delete_queue`, `queue.list_queues`, `queue.metrics`, `queue.purge_queue`. `all_queue_depths()` is called by the depth-scrape background task.                                                                                                                                                   |
 | `src/ops/event.rs`                      | `queue.send_topic` fan-out; `queue.queue_http_deliveries`; subscribe/unsubscribe/list ops; SNS-specific list/delete helpers.                                                                                                                                                                                                                |
-| `src/ops/coalesce.rs`                   | Write coalescer. `Coalescer` is a cloneable handle to an `mpsc::channel`; the background task groups pending sends by `(queue_name, delay)` and flushes them as `send_batch` calls within the `LINGER_MS` window.                                                                                                                           |
+| `src/ops/coalesce.rs`                   | Write coalescer. `Coalescer` is a cloneable handle to an `mpsc::channel`; the background task groups pending sends by `(queue_name, delay)` and flushes them as `send_batch` calls within the `QUEUE_LINGER_MS` window.                                                                                                                     |
 | `src/ops/delivery.rs`                   | Background HTTP delivery worker. Polls `queue.http_deliveries`, POSTs to endpoints, retries with exponential backoff.                                                                                                                                                                                                                       |
 | `src/signing.rs`                        | RSA-2048 keypair generated at startup. `sign_notification()` produces SNS v2 base64 signatures. Self-signed X.509 cert served at `/SimpleNotificationService.pem`.                                                                                                                                                                          |
 | `src/routes/queues.rs`                  | `GET/POST /v1/queues`, `GET/DELETE /v1/queues/{name}`, `POST /v1/queues/{name}/purge`, `GET /v1/queues/{name}/subscriptions`.                                                                                                                                                                                                               |
@@ -440,7 +440,7 @@ When `OTLP_ENABLED=true`, spans are exported to the configured gRPC collector. I
 | `DELETE` | `/v1/events/{pattern}/subscriptions/{id}` | Unsubscribe by id. Returns 204 or 404.                                                                                                |
 | `GET`    | `/v1/queues/{name}/subscriptions`         | List all event subscriptions targeting this queue.                                                                                    |
 | `POST`   | `/v1/schedules`                           | Strict create. Body: schedule spec. Returns 201 + `Location`, or 409 if name taken. See [SCHEDULES.md](SCHEDULES.md).                 |
-| `GET`    | `/v1/schedules`                           | List. Query: `status`, `target_kind`, `name_prefix`. Hard cap of `SCHEDULE_LIST_MAX` rows.                                            |
+| `GET`    | `/v1/schedules`                           | List. Query: `status`, `target_kind`, `name_prefix`. Hard cap of `QUEUE_SCHEDULE_LIST_MAX` rows.                                      |
 | `GET`    | `/v1/schedules/{name}`                    | Read. Includes `human_readable` + `next_fires` projection.                                                                            |
 | `PUT`    | `/v1/schedules/{name}`                    | Idempotent upsert. 201 if newly created, 200 if updated. Used by `cron.schedules.sync()` and agents regenerating config.              |
 | `PATCH`  | `/v1/schedules/{name}`                    | Partial update. Pass `{"status":"paused"}` or `{"status":"active"}` to pause/resume.                                                  |
@@ -458,5 +458,5 @@ Routes: `POST /` and `POST /{account_id}/{queue_name}`.
 
 Supported actions: `SendMessage`, `SendMessageBatch`, `ReceiveMessage`, `DeleteMessage`, `DeleteMessageBatch`, `ChangeMessageVisibility`, `ChangeMessageVisibilityBatch`, `CreateQueue`, `DeleteQueue`, `GetQueueUrl`, `GetQueueAttributes`, `ListQueues`, `PurgeQueue`.
 
-Queue URL format: `{BASE_URL}/000000000000/{queue_name}`.
+Queue URL format: `{QUEUE_BASE_URL}/000000000000/{queue_name}`.
 FIFO queues use `.fifo` suffix in queue name.

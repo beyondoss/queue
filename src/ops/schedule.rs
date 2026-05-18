@@ -261,7 +261,7 @@ pub struct Schedule {
     pub fire_count: i64,
     /// Human-readable summary of the schedule expression, e.g. `"At 09:00, Monday through Friday"`.
     pub human_readable: String,
-    /// Projected next N fire times (UTC). Count is controlled by `SCHEDULE_PREVIEW_COUNT`.
+    /// Projected next N fire times (UTC). Count is controlled by `QUEUE_SCHEDULE_PREVIEW_COUNT`.
     pub next_fires: Vec<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

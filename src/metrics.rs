@@ -171,5 +171,17 @@ define_metrics! {
             => "Current active (checked-out) connections in the database pool",
         counter db_pool_acquire_timeouts_total("db_pool_acquire_timeouts_total")
             => "Total database pool acquire timeout errors (pool exhausted)",
+        counter_vec handoff_handoffs_total("handoff_handoffs_total")["result"]
+            => "Handoff outcomes by result (committed|resumed|seal_failed)",
+        counter handoff_rolled_back_total("handoff_rolled_back_total")
+            => "Number of resume_after_abort calls",
+        counter handoff_seal_failures_total("handoff_seal_failures_total")
+            => "Seal-phase failures",
+        histogram handoff_drain_seconds("handoff_drain_seconds")
+            buckets = DB_OP_BUCKETS
+            => "Time spent in the drain phase per handoff",
+        histogram handoff_seal_seconds("handoff_seal_seconds")
+            buckets = DB_OP_BUCKETS
+            => "Time spent in the seal phase per handoff",
     }
 }

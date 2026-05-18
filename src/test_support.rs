@@ -43,6 +43,8 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
         tls_cert: None,
         tls_key: None,
         tls_ca: None,
+        handoff_state_dir: std::path::PathBuf::from("/tmp"),
+        handoff_socket_path: std::path::PathBuf::from("/tmp/queue-test-unused.sock"),
     };
 
     let metrics = Arc::new(crate::metrics::Metrics::new());
@@ -101,6 +103,8 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         tls_cert: None,
         tls_key: None,
         tls_ca: None,
+        handoff_state_dir: std::path::PathBuf::from("/tmp"),
+        handoff_socket_path: std::path::PathBuf::from("/tmp/queue-test-unused.sock"),
     };
 
     // Start delivery worker with fast poll for tests; detach the handle since

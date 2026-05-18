@@ -49,7 +49,7 @@ pub async fn create_schedule(
     operation_id = "list_schedules",
     tag = "schedules",
     summary = "List schedules",
-    description = "Returns all schedules up to `SCHEDULE_LIST_MAX` (default 1000), ordered by name. \
+    description = "Returns all schedules up to `QUEUE_SCHEDULE_LIST_MAX` (default 1000), ordered by name. \
         Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.",
     params(ListFilter),
     responses(

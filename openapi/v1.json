@@ -769,7 +769,7 @@
           "schedules"
         ],
         "summary": "List schedules",
-        "description": "Returns all schedules up to `SCHEDULE_LIST_MAX` (default 1000), ordered by name. Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.",
+        "description": "Returns all schedules up to `QUEUE_SCHEDULE_LIST_MAX` (default 1000), ordered by name. Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.",
         "operationId": "list_schedules",
         "parameters": [
           {
@@ -1616,7 +1616,7 @@
               "type": "string",
               "format": "date-time"
             },
-            "description": "Projected next N fire times (UTC). Count is controlled by `SCHEDULE_PREVIEW_COUNT`."
+            "description": "Projected next N fire times (UTC). Count is controlled by `QUEUE_SCHEDULE_PREVIEW_COUNT`."
           },
           "status": {
             "type": "string",

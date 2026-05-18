@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Args;
 
 #[derive(Debug, Clone, Args)]
@@ -7,15 +9,15 @@ pub struct Config {
     pub database_url: String,
 
     /// HTTP bind address.
-    #[arg(long, env = "ADDRESS", default_value = "0.0.0.0:9324")]
+    #[arg(long, env = "QUEUE_ADDRESS", default_value = "0.0.0.0:9324")]
     pub address: String,
 
     /// Default visibility timeout in seconds when client doesn't specify one.
-    #[arg(long, env = "DEFAULT_VISIBILITY_TIMEOUT", default_value = "30")]
+    #[arg(long, env = "QUEUE_DEFAULT_VISIBILITY_TIMEOUT", default_value = "30")]
     pub default_visibility_timeout: i32,
 
     /// sqlx pool maximum connections.
-    #[arg(long, env = "MAX_CONNECTIONS", default_value = "10")]
+    #[arg(long, env = "QUEUE_MAX_CONNECTIONS", default_value = "10")]
     pub max_connections: u32,
 
     /// Tracing filter directive (e.g. "info", "beyond_queue=debug").
@@ -39,54 +41,54 @@ pub struct Config {
     ///
     /// Non-FIFO sends are held for up to this duration and flushed as a single
     /// batch, turning N WAL fsyncs into 1. Set to 0 to disable coalescing.
-    /// Tradeoff: up to LINGER_MS added tail latency; messages in flight are
+    /// Tradeoff: up to QUEUE_LINGER_MS added tail latency; messages in flight are
     /// lost on crash (same as any in-flight request).
-    #[arg(long, env = "LINGER_MS", default_value = "0")]
+    #[arg(long, env = "QUEUE_LINGER_MS", default_value = "0")]
     pub linger_ms: u64,
 
     /// Public base URL used to construct SQS queue URLs returned to clients.
     /// Defaults to http://{address}.
-    #[arg(long, env = "BASE_URL")]
+    #[arg(long, env = "QUEUE_BASE_URL")]
     pub base_url_override: Option<String>,
 
     /// Enable HTTP/HTTPS webhook delivery worker.
-    #[arg(long, env = "HTTP_DELIVERY_ENABLED", default_value = "true")]
+    #[arg(long, env = "QUEUE_HTTP_DELIVERY_ENABLED", default_value = "true")]
     pub http_delivery_enabled: bool,
 
     /// Delivery worker poll interval in milliseconds.
-    #[arg(long, env = "HTTP_DELIVERY_POLL_MS", default_value = "1000")]
+    #[arg(long, env = "QUEUE_HTTP_DELIVERY_POLL_MS", default_value = "1000")]
     pub http_delivery_poll_ms: u64,
 
     /// Delivery worker per-request timeout in seconds.
-    #[arg(long, env = "HTTP_DELIVERY_TIMEOUT_SECS", default_value = "5")]
+    #[arg(long, env = "QUEUE_HTTP_DELIVERY_TIMEOUT_SECS", default_value = "5")]
     pub http_delivery_timeout_secs: u64,
 
     /// Delivery worker maximum rows to claim per poll cycle.
-    #[arg(long, env = "HTTP_DELIVERY_BATCH_SIZE", default_value = "50")]
+    #[arg(long, env = "QUEUE_HTTP_DELIVERY_BATCH_SIZE", default_value = "50")]
     pub http_delivery_batch_size: i64,
 
     /// Enable the schedule worker (cron / every / when triggers).
-    #[arg(long, env = "SCHEDULE_ENABLED", default_value = "true")]
+    #[arg(long, env = "QUEUE_SCHEDULE_ENABLED", default_value = "true")]
     pub schedule_enabled: bool,
 
     /// Schedule worker poll interval in milliseconds.
     ///
     /// Floor on fire latency. With the partial index `WHERE status = 'active'`
     /// an empty schedule table costs one sub-millisecond probe per poll.
-    #[arg(long, env = "SCHEDULE_POLL_MS", default_value = "1000")]
+    #[arg(long, env = "QUEUE_SCHEDULE_POLL_MS", default_value = "1000")]
     pub schedule_poll_ms: u64,
 
     /// Schedule worker maximum rows to claim per poll cycle.
-    #[arg(long, env = "SCHEDULE_BATCH_SIZE", default_value = "32")]
+    #[arg(long, env = "QUEUE_SCHEDULE_BATCH_SIZE", default_value = "32")]
     pub schedule_batch_size: i64,
 
     /// Number of upcoming fire timestamps to project in API responses
     /// (`next_fires` array on schedules and previews).
-    #[arg(long, env = "SCHEDULE_PREVIEW_COUNT", default_value = "5")]
+    #[arg(long, env = "QUEUE_SCHEDULE_PREVIEW_COUNT", default_value = "5")]
     pub schedule_preview_count: usize,
 
     /// Hard cap on `GET /v1/schedules` response size.
-    #[arg(long, env = "SCHEDULE_LIST_MAX", default_value = "1000")]
+    #[arg(long, env = "QUEUE_SCHEDULE_LIST_MAX", default_value = "1000")]
     pub schedule_list_max: usize,
 
     /// Path to the PEM-encoded TLS certificate for this service.
@@ -101,6 +103,24 @@ pub struct Config {
     /// Path to the PEM-encoded CA certificate used to verify client certificates.
     #[arg(long, env = "BEYOND_TLS_CA")]
     pub tls_ca: Option<String>,
+
+    /// Directory containing the handoff data-dir flock + pidfile.
+    /// Required by `handoff::DataDirLock`; queue itself stores no data here.
+    #[arg(
+        long,
+        env = "QUEUE_HANDOFF_STATE_DIR",
+        default_value = "/run/beyond/queue"
+    )]
+    pub handoff_state_dir: PathBuf,
+
+    /// Unix-domain socket where the handoff control channel is exposed.
+    /// The supervisor connects here to drive zero-downtime binary swaps.
+    #[arg(
+        long,
+        env = "QUEUE_HANDOFF_SOCKET_PATH",
+        default_value = "/run/beyond/queue/control.sock"
+    )]
+    pub handoff_socket_path: PathBuf,
 }
 
 impl Config {

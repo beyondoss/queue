@@ -241,7 +241,7 @@ export interface paths {
         };
         /**
          * List schedules
-         * @description Returns all schedules up to `SCHEDULE_LIST_MAX` (default 1000), ordered by name. Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.
+         * @description Returns all schedules up to `QUEUE_SCHEDULE_LIST_MAX` (default 1000), ordered by name. Use query parameters to filter by `status`, `target_kind`, or `name_prefix`.
          */
         get: operations["list_schedules"];
         put?: never;
@@ -626,7 +626,7 @@ export interface components {
              * @description Next scheduled fire time.
              */
             next_fire_at: string;
-            /** @description Projected next N fire times (UTC). Count is controlled by `SCHEDULE_PREVIEW_COUNT`. */
+            /** @description Projected next N fire times (UTC). Count is controlled by `QUEUE_SCHEDULE_PREVIEW_COUNT`. */
             next_fires: string[];
             /** @description Current status: `"active"` or `"paused"`. */
             status: string;

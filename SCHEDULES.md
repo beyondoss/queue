@@ -727,7 +727,7 @@ Same network model as the queue. Schedules don't add a security layer.
 | Function VM sleeping when schedule fires            | `queue.send` or topic fan-out delivers HTTP to the function VM's endpoint. Gateway wakes the VM. No special handling needed.                             | Automatic — standard wake-on-traffic path.                 |
 | Server offline past one or more fires               | On resume: if `catchup: false`, advance to next future fire. If `catchup: true`, fire each missed occurrence in order up to `catchup_limit`.             | Automatic. `catchup_limit` exceeded → skip + record error. |
 | Cron expression no longer parses (e.g. lib upgrade) | Worker sets `last_error`, pauses the schedule. Schedule rows are validated on every load to catch this immediately rather than at fire time.             | Operator updates the expression via `PATCH`.               |
-| `every: "1s"` schedule with poll interval 1000ms    | Fire latency is up to one poll interval. Effective fire rate ≈ once per poll cycle, not strictly every second.                                           | Tune `SCHEDULE_POLL_MS` lower if needed; expected.         |
+| `every: "1s"` schedule with poll interval 1000ms    | Fire latency is up to one poll interval. Effective fire rate ≈ once per poll cycle, not strictly every second.                                           | Tune `QUEUE_SCHEDULE_POLL_MS` lower if needed; expected.   |
 | One-shot schedule's fire transaction commits twice  | Cannot — the schedule row is `DELETE`d in the same tx as the dispatch. A second worker sees no row.                                                      | n/a                                                        |
 | Clock jumps backward                                | A schedule's `next_fire_at` becomes "in the future" again. It fires when the clock catches back up. No double fire because the row was already advanced. | Automatic.                                                 |
 | Clock jumps forward (DST / NTP slew)                | Schedules between old and new wall time fire as if catchup were on. Bound by `catchup_limit`.                                                            | Automatic.                                                 |
@@ -736,7 +736,7 @@ Same network model as the queue. Schedules don't add a security layer.
 
 ## Performance notes
 
-- **Worker cost at idle**: one query per `SCHEDULE_POLL_MS` returning zero
+- **Worker cost at idle**: one query per `QUEUE_SCHEDULE_POLL_MS` returning zero
   rows from the partial index `WHERE status = 'active'`. Index-only scan;
   sub-millisecond. Same whether the schedule table is empty or all
   schedules are paused.

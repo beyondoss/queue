@@ -101,6 +101,8 @@ async fn start_tls_server(certs: &CertBundle) -> String {
             tls_cert: None,
             tls_key: None,
             tls_ca: None,
+            handoff_state_dir: std::path::PathBuf::from("/tmp"),
+            handoff_socket_path: std::path::PathBuf::from("/tmp/queue-test-tls-unused.sock"),
         }),
         base_url: "https://127.0.0.1".into(),
         coalescer: None,

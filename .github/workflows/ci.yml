@@ -62,6 +62,10 @@ jobs:
         env:
           SQLX_OFFLINE: "false"
         run: mise run test:integration:rs
+      - name: test:handoff:rs
+        env:
+          SQLX_OFFLINE: "false"
+        run: mise run test:handoff:rs
       - name: check:ts
         run: mise run check:ts
       - name: build:rs:release

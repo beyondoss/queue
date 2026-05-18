@@ -2,6 +2,7 @@ pub mod cli;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod handoff;
 pub mod metrics;
 pub mod middleware;
 pub mod ops;
@@ -15,6 +16,8 @@ pub mod test_support;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -25,6 +28,8 @@ use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use sqlx::PgPool;
+use tokio::runtime::Handle;
+use tokio_util::sync::CancellationToken;
 use tower::{ServiceBuilder, ServiceExt};
 use tower_http::{
     catch_panic::CatchPanicLayer,
@@ -46,7 +51,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// Precomputed base URL — Arc<str> clone is a single atomic increment.
     pub base_url: Arc<str>,
-    /// Write coalescer for non-FIFO sends. None when LINGER_MS=0.
+    /// Write coalescer for non-FIFO sends. None when QUEUE_LINGER_MS=0.
     pub coalescer: Option<Coalescer>,
     /// RSA-2048 signer for SNS notification envelopes.
     pub signer: Arc<Signer>,
@@ -98,17 +103,59 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     };
     let _otel_guard = telemetry::init(&otel_config, vec![], &config.log_level)?;
 
-    let pool = db::connect(&config.database_url, config.max_connections).await?;
-
-    let metrics = Arc::new(Metrics::new());
-
-    let (coalescer, coalescer_handle) = if config.linger_ms > 0 {
-        tracing::info!(linger_ms = config.linger_ms, "write coalescer enabled");
-        let (c, h) = ops::coalesce::start(pool.clone(), config.linger_ms, metrics.clone());
-        (Some(c), Some(h))
-    } else {
-        (None, None)
+    // 1. Role detection before any other thread spawn. `detect_role` reads
+    //    the inherited-FD env vars and clears them; safe to call early.
+    let (inherited_http, mut successor) = match ::handoff::detect_role()
+        .map_err(|e| anyhow::anyhow!("handoff::detect_role: {e}"))?
+    {
+        ::handoff::Role::ColdStart { mut inherited } => {
+            tracing::info!(inherited_listeners = ?inherited.names(), "cold start");
+            (inherited.take("http"), None)
+        }
+        ::handoff::Role::Successor(s) => {
+            let build_id = env!("CARGO_PKG_VERSION").as_bytes().to_vec();
+            let s = s
+                .handshake(build_id)
+                .map_err(|e| anyhow::anyhow!("handshake: {e}"))?;
+            tracing::info!(handoff_id = %s.handoff_id(), "handshake complete; waiting for Begin");
+            let mut s = s
+                .wait_for_begin()
+                .map_err(|e| anyhow::anyhow!("wait_for_begin: {e}"))?;
+            tracing::info!(handoff_id = %s.handoff_id(), "Begin received");
+            (s.take_listener("http"), Some(s))
+        }
     };
+
+    // 2. Acquire the data-dir flock. ColdStart: break_stale recovers from a
+    //    crashed predecessor. Successor: the prior incumbent has released
+    //    after `SealComplete` so this succeeds immediately.
+    let _ = std::fs::create_dir_all(&config.handoff_state_dir);
+    let data_dir_lock = ::handoff::DataDirLock::acquire_or_break_stale(&config.handoff_state_dir)
+        .map_err(|e| {
+        anyhow::anyhow!(
+            "acquire data-dir lock {}: {e}",
+            config.handoff_state_dir.display()
+        )
+    })?;
+
+    // 3. Bind the HTTP listener: inherited if Successor, fresh otherwise.
+    let std_listener: std::net::TcpListener = match inherited_http {
+        Some(l) => {
+            tracing::info!(addr = ?l.local_addr().ok(), "HTTP listening on inherited fd");
+            l
+        }
+        None => {
+            let l = std::net::TcpListener::bind(&config.address)?;
+            tracing::info!(address = %config.address, "HTTP listening (fresh bind)");
+            l
+        }
+    };
+    std_listener.set_nonblocking(true)?;
+    let listener_arc = Arc::new(std_listener);
+
+    // 4. DB pool + workers.
+    let pool = db::connect(&config.database_url, config.max_connections).await?;
+    let metrics = Arc::new(Metrics::new());
 
     let delivery_handle = if config.http_delivery_enabled {
         tracing::info!("HTTP delivery worker enabled");
@@ -141,109 +188,204 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 
     let scrape_handle = start_queue_depth_scrape(pool.clone(), metrics.clone());
 
-    let signer = Arc::new(Signer::generate()?);
-    let base_url: Arc<str> = config.base_url().into();
-    let address = config.address.clone();
-    let state = AppState {
-        pool,
-        config: Arc::new(config),
-        base_url,
-        coalescer,
-        signer,
-        metrics,
-    };
-
-    let app = build_router(state.clone());
-    let listener = tokio::net::TcpListener::bind(&address).await?;
-    let tls = match (
-        &state.config.tls_cert,
-        &state.config.tls_key,
-        &state.config.tls_ca,
-    ) {
-        (Some(cert), Some(key), Some(ca)) => Some((cert.clone(), key.clone(), ca.clone())),
+    // 5. TLS validation (up-front; misconfig surfaces immediately).
+    let tls_parts = match (&config.tls_cert, &config.tls_key, &config.tls_ca) {
+        (Some(c), Some(k), Some(ca)) => Some(handoff::TlsParts {
+            cert: c.clone(),
+            key: k.clone(),
+            ca: ca.clone(),
+        }),
         (None, None, None) => None,
         _ => anyhow::bail!(
             "BEYOND_TLS_CERT, BEYOND_TLS_KEY, and BEYOND_TLS_CA must all be set or all unset"
         ),
     };
-    tracing::info!(address = %address, tls = tls.is_some(), "listening");
-    if let Some((cert, key, ca)) = tls {
-        serve_tls(listener, &cert, &key, &ca, app).await?;
-    } else {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+
+    // 6. Build the rebuild ingredients and the initial AppState.
+    let signer = Arc::new(Signer::generate()?);
+    let base_url: Arc<str> = config.base_url().into();
+    let listening_address = config.address.clone();
+    let handoff_socket_path = config.handoff_socket_path.clone();
+    let config_arc = Arc::new(config);
+    let rebuild = handoff::Rebuild {
+        pool: pool.clone(),
+        config: config_arc.clone(),
+        signer: signer.clone(),
+        base_url: base_url.clone(),
+        metrics: metrics.clone(),
+    };
+    let rt = Handle::current();
+    let (initial_state, coalescer_handle) = rebuild.build_state(&rt);
+    if config_arc.linger_ms > 0 {
+        tracing::info!(linger_ms = config_arc.linger_ms, "write coalescer enabled");
+    }
+    let initial_app = build_router(initial_state.clone());
+
+    // 7. Cancellation tokens + accept_closed flag + server task spawn.
+    let outer_token = CancellationToken::new();
+    let initial_inner_token = CancellationToken::new();
+    let accept_closed = Arc::new(AtomicBool::new(false));
+    let initial_server_jh = handoff::spawn_server_task(
+        listener_arc.clone(),
+        tls_parts.as_ref(),
+        initial_app,
+        outer_token.clone(),
+        initial_inner_token.clone(),
+        accept_closed.clone(),
+        &rt,
+    )?;
+    let server_jh: handoff::ServerJhSlot = Arc::new(StdMutex::new(Some(initial_server_jh)));
+
+    // 8. Build QueueHandoff (sharing the server_jh slot with the main task).
+    let queue_handoff = handoff::QueueHandoff::new(
+        rt.clone(),
+        listener_arc.clone(),
+        tls_parts.clone(),
+        outer_token.clone(),
+        accept_closed.clone(),
+        metrics.clone(),
+        server_jh.clone(),
+        initial_inner_token,
+        rebuild,
+    );
+
+    // 9. Signal handling via signal-hook → atomic flag polled below.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
+
+    // 10. Bind control socket / announce_and_bind.
+    let incumbent = match successor.take() {
+        Some(s) => {
+            #[cfg(feature = "test-hooks")]
+            if std::env::var("QUEUE_TEST_PANIC_BEFORE_READY").is_ok() {
+                std::process::exit(42);
+            }
+            let snapshot = ::handoff::ReadinessSnapshot {
+                listening_on: vec![listening_address.clone()],
+                healthz_ok: true,
+                advertised_revision_per_shard: Vec::new(),
+            };
+            s.announce_and_bind(snapshot, &handoff_socket_path, data_dir_lock)
+                .map_err(|e| anyhow::anyhow!("announce_and_bind: {e}"))?
+        }
+        None => ::handoff::Incumbent::bind_cold_start(&handoff_socket_path, data_dir_lock)
+            .map_err(|e| anyhow::anyhow!("bind handoff control socket: {e}"))?,
+    }
+    .with_build_id(env!("CARGO_PKG_VERSION").as_bytes().to_vec());
+
+    // 11. Handoff control thread. Sets `handoff_committed` (and the
+    //     `shutdown` flag) on a successful commit so the main task knows
+    //     to take the "handoff drained the server task already" cleanup
+    //     path versus the "SIGTERM, we still need to drain axum" path.
+    let handoff_committed = Arc::new(AtomicBool::new(false));
+    let handoff_shutdown = Arc::clone(&shutdown);
+    let handoff_committed_flag = Arc::clone(&handoff_committed);
+    let handoff_metrics = Arc::clone(&metrics);
+    std::thread::Builder::new()
+        .name("queue-handoff".into())
+        .spawn(move || match incumbent.serve(queue_handoff) {
+            Ok(()) => {
+                handoff_metrics
+                    .handoff_handoffs_total
+                    .with_label_values(&["committed"])
+                    .inc();
+                tracing::info!("handoff committed; signaling main to exit");
+                handoff_committed_flag.store(true, Ordering::Relaxed);
+                handoff_shutdown.store(true, Ordering::Relaxed);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "handoff control thread exited with error");
+            }
+        })?;
+
+    // 12. Main wait loop.
+    while !shutdown.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    tracing::info!("draining workers");
+    // 13. Cleanup branches by reason for exit.
+    if handoff_committed.load(Ordering::Relaxed) {
+        // Handoff committed — drain() already awaited the server task and
+        // the handoff thread has returned (which dropped QueueHandoff and
+        // its rebuild ingredients). The active axum task's `AppState`
+        // clone was dropped when it returned, so the only remaining
+        // `Coalescer` sender is `initial_state.coalescer`. Drop our
+        // local clone and the canonical `initial_state` to close the
+        // channel.
+        drop(initial_state);
+        if let Some(jh) = coalescer_handle
+            && tokio::time::timeout(Duration::from_secs(10), jh)
+                .await
+                .is_err()
+        {
+            tracing::warn!("coalescer did not drain within shutdown deadline");
+        }
+    } else {
+        // SIGTERM (or another error path). The server task is still live
+        // and the handoff thread is still blocked in `incumbent.serve`.
+        // Cancel the outer token to trigger axum's graceful shutdown, take
+        // the JH from the shared slot, await it (so long-poll handlers
+        // finish), then drop state to drain the coalescer.
+        tracing::info!("shutdown signal received, draining connections");
+        outer_token.cancel();
+        let jh = server_jh.lock().expect("poisoned").take();
+        if let Some(jh) = jh {
+            // Long-poll receives top out around 30s; 35s leaves headroom.
+            match tokio::time::timeout(Duration::from_secs(35), jh).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => {
+                    tracing::error!(error = %e, "server task error during shutdown")
+                }
+                Ok(Err(je)) => tracing::error!(error = %je, "server task panicked during shutdown"),
+                Err(_) => {
+                    tracing::warn!("server task did not drain within shutdown deadline")
+                }
+            }
+        }
+        drop(initial_state);
+        // QueueHandoff still holds nothing that blocks coalescer drain
+        // (no AppState clone), so dropping `initial_state` is sufficient.
+        if let Some(jh) = coalescer_handle
+            && tokio::time::timeout(Duration::from_secs(10), jh)
+                .await
+                .is_err()
+        {
+            tracing::warn!("coalescer did not drain within shutdown deadline");
+        }
+    }
 
+    if let Some(jh) = delivery_handle {
+        jh.abort();
+        let _ = jh.await;
+    }
+    if let Some(jh) = schedule_handle {
+        jh.abort();
+        let _ = jh.await;
+    }
     scrape_handle.abort();
     let _ = scrape_handle.await;
-
-    // Delivery: abort the task (lease-based design makes this abort-safe —
-    // any mid-flight rows resurface after their lease expires).
-    if let Some(h) = delivery_handle {
-        h.abort();
-        let _ = h.await;
-    }
-
-    // Schedule worker: abort is safe — the outer transaction either committed
-    // (all advances persisted) or aborted (next iteration re-claims the rows).
-    if let Some(h) = schedule_handle {
-        h.abort();
-        let _ = h.await;
-    }
-
-    // Coalescer: AppState (and the Coalescer sender) was dropped when axum::serve
-    // returned, closing the channel. The task exits naturally on the next recv().
-    if let Some(h) = coalescer_handle
-        && tokio::time::timeout(Duration::from_secs(10), h)
-            .await
-            .is_err()
-    {
-        tracing::warn!("coalescer did not drain within shutdown deadline");
-    }
 
     tracing::info!("shutdown complete");
     Ok(())
 }
 
-async fn shutdown_signal() {
-    use tokio::signal;
-
-    let ctrl_c = async {
-        if let Err(e) = signal::ctrl_c().await {
-            tracing::error!(error = %e, "ctrl+c handler failed");
-        }
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            Err(e) => tracing::error!(error = %e, "failed to install SIGTERM handler"),
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-
-    tracing::info!("shutdown signal received, draining connections");
-}
-
-async fn serve_tls(
+/// TLS accept loop. Spawned as a tokio task by [`handoff::spawn_server_task`].
+///
+/// Drives the same `outer_token` + `inner_token` graceful-shutdown signals
+/// as the plain `axum::serve` path, plus an `accept_closed` flag that
+/// short-circuits pending accepts during drain so we don't race a
+/// just-accepted TLS connection past the cancellation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn serve_tls_inner(
     listener: tokio::net::TcpListener,
     cert_path: &str,
     key_path: &str,
     ca_path: &str,
     app: Router,
+    outer_token: CancellationToken,
+    inner_token: CancellationToken,
+    accept_closed: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use hyper_util::server::conn::auto::Builder;
@@ -277,6 +419,10 @@ async fn serve_tls(
     let acceptor = TlsAcceptor::from(std::sync::Arc::new(cfg));
 
     loop {
+        if accept_closed.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            continue;
+        }
         tokio::select! {
             result = listener.accept() => {
                 let (tcp, _) = result?;
@@ -296,19 +442,37 @@ async fn serve_tls(
                     }
                 });
             }
-            _ = shutdown_signal() => break,
+            _ = outer_token.cancelled() => break,
+            _ = inner_token.cancelled() => break,
         }
     }
     Ok(())
 }
 
+/// Test/library helper. Bind an axum server (with optional TLS) on an
+/// already-bound `tokio::net::TcpListener` without any of the handoff or
+/// signal plumbing. Used by the TLS integration test.
 pub async fn serve_with_listener(
     listener: tokio::net::TcpListener,
     tls: Option<(String, String, String)>,
     app: Router,
 ) -> anyhow::Result<()> {
     if let Some((cert, key, ca)) = tls {
-        serve_tls(listener, &cert, &key, &ca, app).await
+        // Use a never-cancelling token + always-false accept flag so the
+        // accept loop runs forever (until the listener is closed).
+        let token = CancellationToken::new();
+        let accept_closed = Arc::new(AtomicBool::new(false));
+        serve_tls_inner(
+            listener,
+            &cert,
+            &key,
+            &ca,
+            app,
+            token.clone(),
+            token,
+            accept_closed,
+        )
+        .await
     } else {
         axum::serve(listener, app).await?;
         Ok(())

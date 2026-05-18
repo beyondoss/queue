@@ -67,7 +67,7 @@ export async function setup(): Promise<void> {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,
-      ADDRESS: `127.0.0.1:${httpPort}`,
+      QUEUE_ADDRESS: `127.0.0.1:${httpPort}`,
       RUST_LOG: "error",
     },
     stdio: ["pipe", "pipe", "inherit"],

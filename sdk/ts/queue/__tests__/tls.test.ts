@@ -186,7 +186,7 @@ beforeAll(async () => {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,
-      ADDRESS: `127.0.0.1:${httpsPort}`,
+      QUEUE_ADDRESS: `127.0.0.1:${httpsPort}`,
       RUST_LOG: "error",
       BEYOND_TLS_CERT: serverCertPath,
       BEYOND_TLS_KEY: serverKeyPath,
