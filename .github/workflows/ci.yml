@@ -8,9 +8,6 @@ env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: "true"
   DATABASE_URL: postgres://postgres:postgres@localhost:5432/beyond_queue
-  # Postgres is provided by service containers + apt (postgresql-server-dev-18);
-  # skip mise's source build which needs libreadline-dev that isn't on the runner.
-  MISE_DISABLE_TOOLS: postgres
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -27,6 +24,8 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v6
+      - name: install postgres build deps for mise
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev zlib1g-dev
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
       - name: install postgres 18 dev headers
@@ -86,6 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: install postgres build deps for mise
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev zlib1g-dev
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
       - name: generate
@@ -108,6 +109,8 @@ jobs:
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v6
+      - name: install postgres build deps for mise
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev zlib1g-dev
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
       - name: install sqlx-cli
