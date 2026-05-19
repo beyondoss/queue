@@ -126,6 +126,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         }
     };
 
+    // Keep the supervisor's per-recv liveness timer (10s) alive while the
+    // successor's slow init runs (DB pool warm-up, state rebuild, TLS load).
+    // Dropped explicitly just before `announce_and_bind` so the main thread
+    // is the sole writer when `Ready` goes on the wire.
+    let heartbeat_guard = successor.as_ref().map(|s| s.start_heartbeats());
+
     // 2. Acquire the data-dir flock. ColdStart: break_stale recovers from a
     //    crashed predecessor. Successor: the prior incumbent has released
     //    after `SealComplete` so this succeeds immediately.
@@ -254,7 +260,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
 
-    // 10. Bind control socket / announce_and_bind.
+    // 10. Bind control socket / announce_and_bind. Stop the heartbeat
+    //     thread first so the main thread is the sole writer for `Ready`.
+    drop(heartbeat_guard);
     let incumbent = match successor.take() {
         Some(s) => {
             #[cfg(feature = "test-hooks")]

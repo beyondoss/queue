@@ -325,9 +325,9 @@ dependencies = [
 
 [[package]]
 name = "beyond-handoff"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2408ad0a3cafcb786727aec57f625c03ef4043898b31473ee7b761b90ceea708"
+checksum = "5d106e5e19cf5c4b7196a06c33b8c76981f14053513cfdabaa79976c844adbc9"
 dependencies = [
  "libc",
  "nix",

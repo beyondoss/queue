@@ -319,7 +319,7 @@ impl Harness {
             binary: self.binary.clone(),
             args,
             env: child_env,
-            deadline: Duration::from_secs(60),
+            deadline: Duration::from_secs(30),
             drain_grace: Duration::from_secs(10),
         };
         let mut outcome = self
@@ -498,7 +498,7 @@ impl Harness {
             binary: self.binary.clone(),
             args: self.queue_args(),
             env: self.merged_env(&[]),
-            deadline: Duration::from_secs(60),
+            deadline: Duration::from_secs(30),
             drain_grace: Duration::from_secs(10),
         }
     }
