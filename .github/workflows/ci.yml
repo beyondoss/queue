@@ -4,12 +4,47 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_TERM_COLOR: always
-  SQLX_OFFLINE: "true"
   DATABASE_URL: postgres://postgres:postgres@localhost:5432/beyond_queue
+  SQLX_OFFLINE: "true"
+# Queue's pgrx hot-path overrides (queue.send/receive/etc) make `sqlx
+# prepare --check` depend on the extension being loaded — the
+# committed .sqlx cache encodes the C signatures. Every postgres job
+# therefore runs setup-pgrx + apply-sql-fixtures (schema → hot_paths →
+# load_pgrx_extension) before any sqlx code runs.
 jobs:
-  ci:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: lint
+      - run: mise run check:fmt
+      - run: mise run check:rs
+  generate-check:
+    name: generated files up-to-date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: gen
+      - run: mise run generate:openapi
+      - run: mise run generate:types
+      - name: check no diff
+        run: |
+          git diff --exit-code -- \
+            openapi/v1.json \
+            sdk/ts/queue/src/types.ts \
+            sdk/ts/events/src/types.ts \
+            sdk/ts/cron/src/types.ts
+  sqlx-check:
+    name: sqlx offline cache up-to-date
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -22,79 +57,32 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      SQLX_OFFLINE: "false"
     steps:
       - uses: actions/checkout@v6
       - name: install postgres build deps for mise
         run: sudo apt-get install -y libreadline-dev uuid-dev
-      - uses: jdx/mise-action@v4
-      - name: ensure rustfmt/clippy components
-        run: rustup component add rustfmt clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: install postgres 18 dev headers
-        run: |
-          sudo apt-get install -y gnupg2 lsb-release
-          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
-          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list
-          sudo apt-get update
-          sudo apt-get install -y postgresql-server-dev-18 libclang-dev clang
-      - name: build and install beyond-queue-extension
-        env:
-          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          PGRX_PG_CONFIG_PATH=/usr/lib/postgresql/18/bin/pg_config \
-            cargo build --release --no-default-features --features pg18 -p beyond-queue-extension
-          PGLIB=$(docker exec "$POSTGRES_CONTAINER" pg_config --pkglibdir)
-          docker cp target/release/libbeyond_queue_extension.so \
-            "${POSTGRES_CONTAINER}:${PGLIB}/libbeyond_queue_extension.so"
-          docker exec "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue \
-            -c "CREATE SCHEMA IF NOT EXISTS queue;"
-          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue \
-            < beyond-queue-extension/sql/schema.sql
-          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue \
-            < tests/fixtures/hot_paths.sql
-          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue \
-            < tests/fixtures/load_pgrx_extension.sql
-      - name: check:fmt
-        run: mise run check:fmt
-      - name: check:rs
-        run: mise run check:rs
-      - name: test:unit:rs
-        run: mise run test:unit:rs
-      - name: test:integration:rs
-        env:
-          SQLX_OFFLINE: "false"
-        run: mise run test:integration:rs
-      - name: test:handoff:rs
-        env:
-          SQLX_OFFLINE: "false"
-        run: mise run test:handoff:rs
-      - name: check:ts
-        run: mise run check:ts
-      - name: build:rs:release
-        run: mise run build:rs:release
-      - name: build:ts
-        run: mise run build:ts
-      - name: test:integration:ts
-        run: mise run test:integration:ts
-  generate-check:
-    name: generated files up-to-date
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: install postgres build deps for mise
-        run: sudo apt-get install -y libreadline-dev uuid-dev
-      - uses: jdx/mise-action@v4
-      - name: ensure rustfmt/clippy components
-        run: rustup component add rustfmt clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: generate
-        run: mise run generate:openapi && mise run generate:types
-      - name: check no diff
-        run: git diff --exit-code
-  sqlx-prepare-check:
-    name: sqlx offline cache up-to-date
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: sqlx-check
+      - uses: ./.github/actions/setup-pgrx
+        with:
+          extension-crate: beyond-queue-extension
+          built-so-name: libbeyond_queue_extension.so
+          install-so-name: libbeyond_queue_extension.so
+          postgres-container-id: ${{ job.services.postgres.id }}
+      - uses: ./.github/actions/apply-sql-fixtures
+        with:
+          postgres-container-id: ${{ job.services.postgres.id }}
+          postgres-db: beyond_queue
+          pre-sql: "CREATE SCHEMA IF NOT EXISTS queue;"
+          fixtures: |
+            beyond-queue-extension/sql/schema.sql
+            tests/fixtures/hot_paths.sql
+            tests/fixtures/load_pgrx_extension.sql
+      - run: mise run check:sqlx
+  rust-test:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -102,48 +90,112 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: beyond_queue_sqlx
+          POSTGRES_DB: beyond_queue
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      SQLX_OFFLINE: "false"
     steps:
       - uses: actions/checkout@v6
       - name: install postgres build deps for mise
         run: sudo apt-get install -y libreadline-dev uuid-dev
-      - uses: jdx/mise-action@v4
-      - name: ensure rustfmt/clippy components
-        run: rustup component add rustfmt clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: install postgres 18 dev headers
-        run: |
-          sudo apt-get install -y gnupg2 lsb-release
-          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
-          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list
-          sudo apt-get update
-          sudo apt-get install -y postgresql-server-dev-18 libclang-dev clang
-      - name: build and install beyond-queue-extension
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-test
+      - uses: ./.github/actions/setup-pgrx
+        with:
+          extension-crate: beyond-queue-extension
+          built-so-name: libbeyond_queue_extension.so
+          install-so-name: libbeyond_queue_extension.so
+          postgres-container-id: ${{ job.services.postgres.id }}
+      - uses: ./.github/actions/apply-sql-fixtures
+        with:
+          postgres-container-id: ${{ job.services.postgres.id }}
+          postgres-db: beyond_queue
+          pre-sql: "CREATE SCHEMA IF NOT EXISTS queue;"
+          fixtures: |
+            beyond-queue-extension/sql/schema.sql
+            tests/fixtures/hot_paths.sql
+            tests/fixtures/load_pgrx_extension.sql
+      - run: mise run test:unit:rs
+      - run: mise run test:integration:rs
+  handoff-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
         env:
-          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          PGRX_PG_CONFIG_PATH=/usr/lib/postgresql/18/bin/pg_config \
-            cargo build --release --no-default-features --features pg18 -p beyond-queue-extension
-          PGLIB=$(docker exec "$POSTGRES_CONTAINER" pg_config --pkglibdir)
-          docker cp target/release/libbeyond_queue_extension.so \
-            "${POSTGRES_CONTAINER}:${PGLIB}/libbeyond_queue_extension.so"
-          docker exec "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
-            -c "CREATE SCHEMA IF NOT EXISTS queue;"
-          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
-            < beyond-queue-extension/sql/schema.sql
-          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
-            < tests/fixtures/hot_paths.sql
-          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
-            < tests/fixtures/load_pgrx_extension.sql
-      - name: install sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features postgres
-      - name: check sqlx prepare is up to date
-        run: cargo sqlx prepare --check --workspace
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beyond_queue
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      SQLX_OFFLINE: "false"
+    steps:
+      - uses: actions/checkout@v6
+      - name: install postgres build deps for mise
+        run: sudo apt-get install -y libreadline-dev uuid-dev
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: handoff-test
+      - uses: ./.github/actions/setup-pgrx
+        with:
+          extension-crate: beyond-queue-extension
+          built-so-name: libbeyond_queue_extension.so
+          install-so-name: libbeyond_queue_extension.so
+          postgres-container-id: ${{ job.services.postgres.id }}
+      - uses: ./.github/actions/apply-sql-fixtures
+        with:
+          postgres-container-id: ${{ job.services.postgres.id }}
+          postgres-db: beyond_queue
+          pre-sql: "CREATE SCHEMA IF NOT EXISTS queue;"
+          fixtures: |
+            beyond-queue-extension/sql/schema.sql
+            tests/fixtures/hot_paths.sql
+            tests/fixtures/load_pgrx_extension.sql
+      - run: mise run test:handoff:rs
+  ts-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/beyond_queue_sqlx
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beyond_queue
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      SQLX_OFFLINE: "false"
+    steps:
+      - uses: actions/checkout@v6
+      - name: install postgres build deps for mise
+        run: sudo apt-get install -y libreadline-dev uuid-dev
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ts-test
+      - uses: ./.github/actions/setup-pgrx
+        with:
+          extension-crate: beyond-queue-extension
+          built-so-name: libbeyond_queue_extension.so
+          install-so-name: libbeyond_queue_extension.so
+          postgres-container-id: ${{ job.services.postgres.id }}
+      - uses: ./.github/actions/apply-sql-fixtures
+        with:
+          postgres-container-id: ${{ job.services.postgres.id }}
+          postgres-db: beyond_queue
+          pre-sql: "CREATE SCHEMA IF NOT EXISTS queue;"
+          fixtures: |
+            beyond-queue-extension/sql/schema.sql
+            tests/fixtures/hot_paths.sql
+            tests/fixtures/load_pgrx_extension.sql
+      - run: mise run check:ts
+      - run: mise run build:ts
+      - run: mise run test:integration:ts

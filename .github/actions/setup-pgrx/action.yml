@@ -1,0 +1,56 @@
+name: setup-pgrx
+description: |
+  Install PG dev headers, build the pgrx extension .so, copy it into the
+  postgres service container's pkglibdir. Caller must:
+    1. Define a services.postgres block on the job.
+    2. Pass postgres-container-id from job.services.postgres.id (the
+       job context is not available in job-level env, only in step inputs).
+    3. Have already run actions/checkout + setup-rust.
+inputs:
+  pg-version:
+    description: Postgres major version (matches the postgres:N image and pg<N> feature flag).
+    required: false
+    default: "18"
+  extension-crate:
+    description: Cargo package name of the pgrx extension (e.g. beyond-auth-extension).
+    required: true
+  built-so-name:
+    description: Filename of the .so as cargo emits it under target/release (some pgrx crates emit lib*.so, others don't).
+    required: true
+  install-so-name:
+    description: Filename the postgres extension expects in pkglibdir. May differ from built-so-name when cargo emits a lib- prefix.
+    required: true
+  postgres-container-id:
+    description: The job's postgres service container id (from job.services.postgres.id).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: install postgres ${{ inputs.pg-version }} dev headers
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get install -y gnupg2 lsb-release
+        wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+          | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+        echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+          | sudo tee /etc/apt/sources.list.d/pgdg.list
+        sudo apt-get update
+        sudo apt-get install -y \
+          postgresql-server-dev-${{ inputs.pg-version }} libclang-dev clang
+    - name: build pgrx extension
+      shell: bash
+      run: |
+        set -euo pipefail
+        PGRX_PG_CONFIG_PATH=/usr/lib/postgresql/${{ inputs.pg-version }}/bin/pg_config \
+          cargo build --release --no-default-features \
+          --features pg${{ inputs.pg-version }} \
+          -p ${{ inputs.extension-crate }}
+    - name: install .so into postgres service container
+      shell: bash
+      run: |
+        set -euo pipefail
+        PGLIB=$(docker exec "${{ inputs.postgres-container-id }}" pg_config --pkglibdir)
+        docker cp \
+          target/release/${{ inputs.built-so-name }} \
+          "${{ inputs.postgres-container-id }}:${PGLIB}/${{ inputs.install-so-name }}"

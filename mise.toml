@@ -36,6 +36,14 @@ depends = ["generate:types"]
 [tasks."check:fmt"]
 run = "dprint check"
 
+# Verifies the committed .sqlx/ offline-query cache matches the live
+# query!/query_as! macro calls. CI runs this against a postgres+pgrx
+# instance already loaded with schema.sql + hot_paths.sql +
+# load_pgrx_extension.sql so the pgrx-overridden function signatures
+# resolve correctly.
+[tasks."check:sqlx"]
+run = "cargo sqlx prepare --check --workspace -- --tests"
+
 [tasks."format"]
 run = "dprint fmt"
 
@@ -91,10 +99,14 @@ depends = ["test:types:queue", "test:types:events"]
 run = "cargo run -- generate-openapi && dprint fmt openapi/v1.json"
 
 [tasks."generate:types"]
+# Each generate-types.mjs script dprint-fmts its own output, so the
+# trailing dprint fmt here is defensive only (catches the case where a
+# script is invoked outside this task wrapper).
 run = [
   "node queue/scripts/generate-types.mjs",
   "node events/scripts/generate-types.mjs",
-  "dprint fmt queue/src/types.ts events/src/types.ts",
+  "node cron/scripts/generate-types.mjs",
+  "dprint fmt queue/src/types.ts events/src/types.ts cron/src/types.ts",
 ]
 dir = "sdk/ts"
 depends = ["install:ts", "generate:openapi"]
