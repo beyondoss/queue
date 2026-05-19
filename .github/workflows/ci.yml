@@ -45,7 +45,7 @@ jobs:
             cargo build --release --no-default-features --features pg18 -p beyond-queue-extension
           PGLIB=$(docker exec "$POSTGRES_CONTAINER" pg_config --pkglibdir)
           docker cp target/release/libbeyond_queue_extension.so \
-            "${POSTGRES_CONTAINER}:${PGLIB}/beyond_queue_extension.so"
+            "${POSTGRES_CONTAINER}:${PGLIB}/libbeyond_queue_extension.so"
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue \
             -c "CREATE SCHEMA IF NOT EXISTS queue;"
           docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue \
@@ -113,6 +113,32 @@ jobs:
         run: sudo apt-get install -y libreadline-dev uuid-dev
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
+      - name: install postgres 18 dev headers
+        run: |
+          sudo apt-get install -y gnupg2 lsb-release
+          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-server-dev-18 libclang-dev clang
+      - name: build and install beyond-queue-extension
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          PGRX_PG_CONFIG_PATH=/usr/lib/postgresql/18/bin/pg_config \
+            cargo build --release --no-default-features --features pg18 -p beyond-queue-extension
+          PGLIB=$(docker exec "$POSTGRES_CONTAINER" pg_config --pkglibdir)
+          docker cp target/release/libbeyond_queue_extension.so \
+            "${POSTGRES_CONTAINER}:${PGLIB}/libbeyond_queue_extension.so"
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
+            -c "CREATE SCHEMA IF NOT EXISTS queue;"
+          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
+            < beyond-queue-extension/sql/schema.sql
+          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
+            < tests/fixtures/hot_paths.sql
+          docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d beyond_queue_sqlx \
+            < tests/fixtures/load_pgrx_extension.sql
       - name: install sqlx-cli
         run: cargo install sqlx-cli --no-default-features --features postgres
       - name: check sqlx prepare is up to date
