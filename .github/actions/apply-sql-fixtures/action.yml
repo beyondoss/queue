@@ -1,0 +1,62 @@
+name: apply-sql-fixtures
+description: |
+  psql a list of SQL files into the postgres service container. Used by
+  repos whose schema lives in source-controlled SQL fixtures (rather than
+  sqlx-migrate). Caller must:
+    1. Have a services.postgres block on the job.
+    2. Pass postgres-container-id from job.services.postgres.id.
+    3. Have a `psql` client available (the postgres container has it; we
+       use docker exec to run it inside the container).
+inputs:
+  postgres-container-id:
+    description: The postgres service container id (from job.services.postgres.id).
+    required: true
+  postgres-db:
+    description: Target database name inside the container.
+    required: true
+  postgres-user:
+    description: Postgres role to connect as.
+    required: false
+    default: postgres
+  pre-sql:
+    description: |
+      Optional inline SQL to run before any fixture file (e.g.
+      "CREATE SCHEMA IF NOT EXISTS queue;"). Multi-line is fine.
+    required: false
+    default: ""
+  fixtures:
+    description: |
+      Newline-separated list of SQL file paths (relative to the repo root)
+      to pipe into psql in order. Empty lines and lines starting with `#`
+      are ignored.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: apply sql fixtures
+      shell: bash
+      env:
+        CONTAINER: ${{ inputs.postgres-container-id }}
+        DB: ${{ inputs.postgres-db }}
+        USER: ${{ inputs.postgres-user }}
+        PRE_SQL: ${{ inputs.pre-sql }}
+        FIXTURES: ${{ inputs.fixtures }}
+      run: |
+        set -euo pipefail
+        if [ -n "$PRE_SQL" ]; then
+          docker exec -i "$CONTAINER" psql -U "$USER" -d "$DB" -v ON_ERROR_STOP=1 \
+            <<<"$PRE_SQL"
+        fi
+        printf '%s\n' "$FIXTURES" | while IFS= read -r path; do
+          # skip blanks and comments
+          case "$path" in
+            "" | \#*) continue ;;
+          esac
+          if [ ! -f "$path" ]; then
+            echo "fixture not found: $path" >&2
+            exit 1
+          fi
+          echo "applying fixture: $path"
+          docker exec -i "$CONTAINER" psql -U "$USER" -d "$DB" -v ON_ERROR_STOP=1 \
+            < "$path"
+        done
