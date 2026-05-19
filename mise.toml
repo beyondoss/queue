@@ -88,12 +88,13 @@ depends = ["generate:types"]
 depends = ["test:types:queue", "test:types:events"]
 
 [tasks."generate:openapi"]
-run = "cargo run -- generate-openapi"
+run = "cargo run -- generate-openapi && dprint fmt openapi/v1.json"
 
 [tasks."generate:types"]
 run = [
   "node queue/scripts/generate-types.mjs",
   "node events/scripts/generate-types.mjs",
+  "dprint fmt queue/src/types.ts events/src/types.ts",
 ]
 dir = "sdk/ts"
 depends = ["install:ts", "generate:openapi"]
