@@ -3,8 +3,9 @@ import {
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
 import { type ChildProcess, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -63,11 +64,17 @@ export async function setup(): Promise<void> {
   const binaryPath = process.env["BEYOND_QUEUE_BINARY"]
     ?? resolve(__dirname, "../../../../target/debug/beyond-queue");
 
+  // Per-run tmp dir for the handoff data-dir flock + control socket. Default
+  // is /run/beyond/queue which the CI runner can't write to.
+  const stateDir = mkdtempSync(`${tmpdir()}/beyond-queue-test-`);
+
   serverProcess = spawn(binaryPath, ["serve"], {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,
       QUEUE_ADDRESS: `127.0.0.1:${httpPort}`,
+      QUEUE_HANDOFF_STATE_DIR: stateDir,
+      QUEUE_HANDOFF_SOCKET_PATH: `${stateDir}/control.sock`,
       RUST_LOG: "error",
     },
     stdio: ["pipe", "pipe", "inherit"],
