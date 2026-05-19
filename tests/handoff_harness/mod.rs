@@ -714,24 +714,46 @@ pub fn send_message(addr: SocketAddr, queue: &str, body: &str) -> Option<i64> {
 /// Blocking `GET /v1/queues/{name}/messages?max=1` and return the first
 /// message's body (if any).
 pub fn receive_one(addr: SocketAddr, queue: &str) -> Option<String> {
-    let url = format!("http://{addr}/v1/queues/{queue}/messages?max=1&wait=2&vt=10");
+    receive_batch(addr, queue, 1, 10).into_iter().next()
+}
+
+/// Blocking `GET /v1/queues/{name}/messages?max=N` returning every body in the
+/// batch. Used by the soak/durability tests that need to drain thousands of
+/// messages within a wall-clock budget — one round-trip per message blows the
+/// budget on CI's slow network path.
+///
+/// `vt` is the per-message visibility timeout in seconds. A long `vt`
+/// (e.g. 180) avoids re-receiving the same message while the test loop is
+/// still draining.
+pub fn receive_batch(addr: SocketAddr, queue: &str, max: u32, vt: u32) -> Vec<String> {
+    let url =
+        format!("http://{addr}/v1/queues/{queue}/messages?max={max}&wait=2&vt={vt}");
     let resp = ureq::get(&url).set("Authorization", "Bearer test").call();
     match resp {
         Ok(r) => {
-            let text = r.into_string().ok()?;
-            let arr: serde_json::Value = serde_json::from_str(&text).ok()?;
-            let first = arr.as_array()?.first()?;
-            first.get("message").and_then(|m| {
-                // `message` may be a string or a JSON value depending on
-                // how it was sent; return its text form.
-                m.as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| Some(m.to_string()))
-            })
+            let Some(text) = r.into_string().ok() else {
+                return Vec::new();
+            };
+            let Some(arr) = serde_json::from_str::<serde_json::Value>(&text).ok() else {
+                return Vec::new();
+            };
+            let Some(items) = arr.as_array() else {
+                return Vec::new();
+            };
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get("message").and_then(|m| {
+                        m.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(m.to_string()))
+                    })
+                })
+                .collect()
         }
-        Err(ureq::Error::Status(404, _)) => None,
-        Err(ureq::Error::Status(code, _)) => panic!("receive_one({url}): status {code}"),
-        Err(e) => panic!("receive_one({url}): {e}"),
+        Err(ureq::Error::Status(404, _)) => Vec::new(),
+        Err(ureq::Error::Status(code, _)) => panic!("receive_batch({url}): status {code}"),
+        Err(e) => panic!("receive_batch({url}): {e}"),
     }
 }
 

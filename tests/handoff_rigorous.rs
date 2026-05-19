@@ -6,7 +6,8 @@ mod handoff_harness;
 use std::time::Duration;
 
 use handoff_harness::{
-    Harness, Sender, create_queue, fetch_metrics, metric_value, receive_one, send_message,
+    Harness, Sender, create_queue, fetch_metrics, metric_value, receive_batch, receive_one,
+    send_message,
 };
 
 /// Sender thread spammed across pre/during/post-handoff. Every 200-acked
@@ -53,13 +54,18 @@ async fn acked_sends_durable_under_handoff() {
         result.acked.len()
     );
 
-    // Receive all messages and assert every acked body is present.
+    // Receive all messages and assert every acked body is present. Use a
+    // batch read with a long `vt` so the test doesn't re-receive the same
+    // bodies while draining — single-message reads at CI's per-RTT cost
+    // blow the wall-clock budget on the larger soak test.
     let mut received: Vec<String> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while received.len() < result.acked.len() && std::time::Instant::now() < deadline {
-        if let Some(body) = receive_one(addr, "load_q") {
-            received.push(body);
+        let batch = receive_batch(addr, "load_q", 32, 180);
+        if batch.is_empty() {
+            break;
         }
+        received.extend(batch);
     }
     // Each ack was for body `msg-N`; assert every N is present.
     for ack in &result.acked {
@@ -746,15 +752,18 @@ async fn ten_consecutive_handoffs_under_sustained_load() {
         result.acked.len()
     );
 
-    // Every acked body must be receivable.
+    // Every acked body must be receivable. Batch-read with a long `vt` so
+    // we drain each message exactly once and don't lose the wall-clock
+    // budget to per-message round-trips on CI.
     let mut received: Vec<String> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(45);
     while received.len() < result.acked.len() && std::time::Instant::now() < deadline {
-        if let Some(body) = receive_one(addr, "soak_q") {
-            received.push(body);
-        } else {
+        let batch = receive_batch(addr, "soak_q", 32, 180);
+        if batch.is_empty() {
             tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
         }
+        received.extend(batch);
     }
     let missing: Vec<String> = result
         .acked
