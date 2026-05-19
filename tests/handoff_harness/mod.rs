@@ -319,7 +319,7 @@ impl Harness {
             binary: self.binary.clone(),
             args,
             env: child_env,
-            deadline: Duration::from_secs(30),
+            deadline: Duration::from_secs(60),
             drain_grace: Duration::from_secs(10),
         };
         let mut outcome = self
@@ -348,15 +348,18 @@ impl Harness {
     /// 200. For TLS servers we only TCP-probe — tests should build their
     /// own mTLS client for the HTTP-level check.
     pub fn wait_ready(&self) {
+        // Generous timeout: under CI load (shared CPU, postgres in container,
+        // build artifacts on slow disk) cold start of the queue subprocess
+        // can take ~15-20s.
         assert!(
-            wait_for_path(&self.control_socket, Duration::from_secs(10)),
+            wait_for_path(&self.control_socket, Duration::from_secs(30)),
             "control socket {:?} never appeared",
             self.control_socket
         );
         if self.tls_certs.is_some() {
-            wait_for_tcp(self.http_addr, Duration::from_secs(10));
+            wait_for_tcp(self.http_addr, Duration::from_secs(30));
         } else {
-            wait_for_livez(self.http_addr, Duration::from_secs(10));
+            wait_for_livez(self.http_addr, Duration::from_secs(30));
         }
     }
 
@@ -495,7 +498,7 @@ impl Harness {
             binary: self.binary.clone(),
             args: self.queue_args(),
             env: self.merged_env(&[]),
-            deadline: Duration::from_secs(30),
+            deadline: Duration::from_secs(60),
             drain_grace: Duration::from_secs(10),
         }
     }
