@@ -8,6 +8,9 @@ env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: "true"
   DATABASE_URL: postgres://postgres:postgres@localhost:5432/beyond_queue
+  # Postgres is provided by service containers + apt (postgresql-server-dev-18);
+  # skip mise's source build which needs libreadline-dev that isn't on the runner.
+  MISE_DISABLE_TOOLS: postgres
 jobs:
   ci:
     runs-on: ubuntu-latest
