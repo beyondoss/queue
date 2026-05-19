@@ -476,13 +476,24 @@ async fn catchup_fires_missed_occurrences() {
         scheduled_for_seen.len()
     );
 
-    let after = client
-        .get(&format!("/v1/schedules/{name}"))
-        .await
-        .assert_status(200)
-        .json::<serde_json::Value>();
-    // last_error should mention catchup_limit_exceeded.
-    let err = after["last_error"].as_str().unwrap_or("");
+    // Poll for last_error: the worker update that marks
+    // catchup_limit_exceeded races with our drain loop, especially on
+    // slow CI runners where the worker may still be flushing its UPDATE
+    // when the drain finishes.
+    let mut err = String::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let after = client
+            .get(&format!("/v1/schedules/{name}"))
+            .await
+            .assert_status(200)
+            .json::<serde_json::Value>();
+        err = after["last_error"].as_str().unwrap_or("").to_string();
+        if err.contains("catchup_limit_exceeded") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert!(
         err.contains("catchup_limit_exceeded"),
         "expected catchup_limit_exceeded in last_error, got: {err:?}"
