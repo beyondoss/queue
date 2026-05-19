@@ -726,8 +726,7 @@ pub fn receive_one(addr: SocketAddr, queue: &str) -> Option<String> {
 /// (e.g. 180) avoids re-receiving the same message while the test loop is
 /// still draining.
 pub fn receive_batch(addr: SocketAddr, queue: &str, max: u32, vt: u32) -> Vec<String> {
-    let url =
-        format!("http://{addr}/v1/queues/{queue}/messages?max={max}&wait=2&vt={vt}");
+    let url = format!("http://{addr}/v1/queues/{queue}/messages?max={max}&wait=2&vt={vt}");
     let resp = ureq::get(&url).set("Authorization", "Bearer test").call();
     match resp {
         Ok(r) => {
