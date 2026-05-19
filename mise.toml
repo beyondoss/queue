@@ -40,7 +40,7 @@ run = "dprint check"
 run = "dprint fmt"
 
 [tasks."install:ts"]
-run = "npm install"
+run = "npm ci"
 dir = "sdk/ts"
 
 [tasks."test:unit:rs"]
