@@ -73,8 +73,8 @@ jobs:
       - uses: ./.github/actions/setup-pgrx
         with:
           extension-crate: beyond-queue-extension
-          built-so-name: libbeyond_queue_extension.so
-          install-so-name: libbeyond_queue_extension.so
+          built-so-name: libbeyond_queue.so
+          install-so-name: beyond_queue.so
           postgres-container-id: ${{ job.services.postgres.id }}
       - uses: ./.github/actions/apply-sql-fixtures
         with:
@@ -111,8 +111,8 @@ jobs:
       - uses: ./.github/actions/setup-pgrx
         with:
           extension-crate: beyond-queue-extension
-          built-so-name: libbeyond_queue_extension.so
-          install-so-name: libbeyond_queue_extension.so
+          built-so-name: libbeyond_queue.so
+          install-so-name: beyond_queue.so
           postgres-container-id: ${{ job.services.postgres.id }}
       - uses: ./.github/actions/apply-sql-fixtures
         with:
@@ -150,8 +150,8 @@ jobs:
       - uses: ./.github/actions/setup-pgrx
         with:
           extension-crate: beyond-queue-extension
-          built-so-name: libbeyond_queue_extension.so
-          install-so-name: libbeyond_queue_extension.so
+          built-so-name: libbeyond_queue.so
+          install-so-name: beyond_queue.so
           postgres-container-id: ${{ job.services.postgres.id }}
       - uses: ./.github/actions/apply-sql-fixtures
         with:
@@ -188,8 +188,8 @@ jobs:
       - uses: ./.github/actions/setup-pgrx
         with:
           extension-crate: beyond-queue-extension
-          built-so-name: libbeyond_queue_extension.so
-          install-so-name: libbeyond_queue_extension.so
+          built-so-name: libbeyond_queue.so
+          install-so-name: beyond_queue.so
           postgres-container-id: ${{ job.services.postgres.id }}
       - uses: ./.github/actions/apply-sql-fixtures
         with:

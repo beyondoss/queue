@@ -138,7 +138,7 @@ CREATE INDEX IF NOT EXISTS schedule_due_idx
 DO
 $$
 BEGIN
-    IF EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'beyond_queue_extension') THEN
+    IF EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'beyond_queue') THEN
         PERFORM pg_catalog.pg_extension_config_dump('queue.meta', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.notify_insert_throttle', '');
         PERFORM pg_catalog.pg_extension_config_dump('queue.event_subscriptions', '');
@@ -216,7 +216,7 @@ BEGIN
     SELECT EXISTS (
         SELECT 1
         FROM pg_depend
-        WHERE refobjid = (SELECT oid FROM pg_extension WHERE extname = 'beyond_queue_extension')
+        WHERE refobjid = (SELECT oid FROM pg_extension WHERE extname = 'beyond_queue')
           AND objid = (SELECT oid FROM pg_class WHERE relname = table_name)
     ) INTO result;
     RETURN result;

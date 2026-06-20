@@ -1,5 +1,5 @@
 comment = 'Queue and workflow primitives for Beyond'
 default_version = '0.1.0'
-module_pathname = '$libdir/libbeyond_queue_extension'
+module_pathname = '$libdir/beyond_queue'
 relocatable = false
 superuser = false

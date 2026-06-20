@@ -50,14 +50,17 @@ jobs:
           PG=${{ matrix.pg }}
           mkdir -p dist/usr/lib/postgresql/${PG}/lib
           mkdir -p dist/usr/share/postgresql/${PG}/extension
-          cp target/release/libbeyond_queue_extension.so \
-             dist/usr/lib/postgresql/${PG}/lib/
-          cp beyond-queue-extension/beyond_queue_extension.control \
+          # Canonical install name is `beyond_queue` (the beyond-pg supervisor's
+          # REQUIRED_EXTENSIONS / shared_preload). cargo emits libbeyond_queue.so;
+          # install it as beyond_queue.so so $libdir/beyond_queue resolves.
+          cp target/release/libbeyond_queue.so \
+             dist/usr/lib/postgresql/${PG}/lib/beyond_queue.so
+          cp beyond-queue-extension/beyond_queue.control \
              dist/usr/share/postgresql/${PG}/extension/
           cat beyond-queue-extension/sql/schema.sql \
               tests/fixtures/hot_paths.sql \
               tests/fixtures/load_pgrx_extension.sql \
-              > dist/usr/share/postgresql/${PG}/extension/beyond_queue_extension--${VERSION}.sql
+              > dist/usr/share/postgresql/${PG}/extension/beyond_queue--${VERSION}.sql
           tar -czf beyond-queue-extension-v${VERSION}-pg${PG}-linux-${{ matrix.arch }}.tar.gz \
             -C dist .
       - uses: actions/upload-artifact@v7

@@ -4,7 +4,13 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# lib.name fixes the canonical install identity to `beyond_queue` (control file
+# beyond_queue.control, $libdir/beyond_queue, beyond_queue--<ver>.sql) that the
+# beyond-pg supervisor expects (REQUIRED_EXTENSIONS / shared_preload_libraries).
+# cargo build emits libbeyond_queue.so; packaging copies it to beyond_queue.so.
+# The cargo package stays `beyond-queue-extension` (CI `-p`, asset prefix).
 [lib]
+name = "beyond_queue"
 crate-type = ["cdylib"]
 
 [features]

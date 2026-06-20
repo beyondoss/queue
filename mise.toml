@@ -128,7 +128,7 @@ DB="postgres://postgres:postgres@localhost:${PG_PORT}/postgres"
 # CI's `cargo sqlx prepare --check` fails after pgrx loads override them.
 PGRX_PG_CONFIG_PATH=$(which pg_config) cargo build --release --no-default-features --features pg18 -p beyond-queue-extension
 PGLIB=$(docker exec bq-sqlx-prepare pg_config --pkglibdir)
-docker cp target/release/libbeyond_queue_extension.so bq-sqlx-prepare:${PGLIB}/libbeyond_queue_extension.so
+docker cp target/release/libbeyond_queue.so bq-sqlx-prepare:${PGLIB}/beyond_queue.so
 docker exec bq-sqlx-prepare psql -U postgres -c "CREATE SCHEMA IF NOT EXISTS queue;"
 docker exec -i bq-sqlx-prepare psql -U postgres < beyond-queue-extension/sql/schema.sql
 docker exec -i bq-sqlx-prepare psql -U postgres < tests/fixtures/hot_paths.sql
@@ -142,7 +142,7 @@ docker stop bq-sqlx-prepare
 run = "PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release -p beyond-queue-extension --features pg18"
 
 # Build the pgrx extension .so for linux/amd64 (postgres:18, glibc/Debian).
-# Output: target/release/libbeyond_queue_extension.so
+# Output: target/release/libbeyond_queue.so
 [tasks."extension:build:linux:amd64"]
 run = """
 docker run --rm --platform linux/amd64 \
@@ -154,12 +154,12 @@ docker run --rm --platform linux/amd64 \
     curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92 --profile minimal --quiet 2>&1 | tail -2 &&
     . "$HOME/.cargo/env" &&
     PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release --no-default-features --features pg18 -p beyond-queue-extension --manifest-path /src/beyond-queue-extension/Cargo.toml --target-dir /src/target 2>&1 &&
-    echo "Built: /src/target/release/libbeyond_queue_extension.so"
+    echo "Built: /src/target/release/libbeyond_queue.so"
   '
 """
 
 # Build the pgrx extension .so for linux/arm64 (postgres:18, Apple Silicon / Graviton).
-# Output: target/aarch64-unknown-linux-gnu/release/libbeyond_queue_extension.so
+# Output: target/aarch64-unknown-linux-gnu/release/libbeyond_queue.so
 [tasks."extension:build:linux:arm64"]
 run = """
 docker run --rm --platform linux/arm64 \
@@ -172,8 +172,8 @@ docker run --rm --platform linux/arm64 \
     . "$HOME/.cargo/env" &&
     PGRX_PG_CONFIG_PATH=/usr/bin/pg_config cargo build --release --no-default-features --features pg18 -p beyond-queue-extension --manifest-path /src/beyond-queue-extension/Cargo.toml --target-dir /src/target 2>&1 &&
     mkdir -p /src/target/aarch64-unknown-linux-gnu/release &&
-    cp /src/target/release/libbeyond_queue_extension.so /src/target/aarch64-unknown-linux-gnu/release/libbeyond_queue_extension.so &&
-    echo "Built: /src/target/aarch64-unknown-linux-gnu/release/libbeyond_queue_extension.so"
+    cp /src/target/release/libbeyond_queue.so /src/target/aarch64-unknown-linux-gnu/release/libbeyond_queue.so &&
+    echo "Built: /src/target/aarch64-unknown-linux-gnu/release/libbeyond_queue.so"
   '
 """
 
@@ -203,8 +203,8 @@ BASELINE_URL="postgres://postgres:postgres@127.0.0.1:${BASELINE_PORT}/postgres"
 TREATMENT_URL="postgres://postgres:postgres@127.0.0.1:${TREATMENT_PORT}/postgres"
 OSS_PGMQ_SQL="bench/fixtures/pgmq_baseline.sql"
 
-if [ ! -f "target/release/libbeyond_queue_extension.so" ]; then
-  echo "ERROR: target/release/libbeyond_queue_extension.so not found." >&2
+if [ ! -f "target/release/libbeyond_queue.so" ]; then
+  echo "ERROR: target/release/libbeyond_queue.so not found." >&2
   echo "Run: mise run extension:build" >&2
   exit 1
 fi
@@ -220,9 +220,9 @@ docker run -d --name bq-bench \
 
 docker create --name bq-bench-ext \
   -e POSTGRES_PASSWORD=postgres -p ${TREATMENT_PORT}:5432 \
-  postgres:18 postgres -c shared_preload_libraries=libbeyond_queue_extension
-docker cp target/release/libbeyond_queue_extension.so \
-  bq-bench-ext:/usr/lib/postgresql/18/lib/libbeyond_queue_extension.so
+  postgres:18 postgres -c shared_preload_libraries=beyond_queue
+docker cp target/release/libbeyond_queue.so \
+  bq-bench-ext:/usr/lib/postgresql/18/lib/beyond_queue.so
 docker start bq-bench-ext
 
 until docker exec bq-bench pg_isready -U postgres > /dev/null 2>&1; do sleep 0.3; done
