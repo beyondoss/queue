@@ -19,7 +19,11 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+      # mise.toml pins `postgres = "18"`, which mise builds from source — it needs
+      # readline + uuid headers present first (mirrors ci.yml).
+      - name: install postgres build deps for mise
+        run: sudo apt-get install -y libreadline-dev uuid-dev
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
       - name: build
