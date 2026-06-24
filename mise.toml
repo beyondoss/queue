@@ -8,6 +8,10 @@ yamlfmt = "latest"
 cargo-binstall = "latest"
 "cargo:sqlx-cli" = "latest"
 "cargo:cross" = "latest"
+# Release binaries are built with cargo-zigbuild pinned to glibc 2.39 (the
+# noble/24.04 floor) so the runner's newer glibc never leaks into the link.
+zig = "latest"
+"cargo:cargo-zigbuild" = "latest"
 node = "lts"
 postgres = "18"
 

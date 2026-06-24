@@ -15,8 +15,12 @@ jobs:
         include:
           - os: ubuntu-latest
             arch: amd64
+            target: x86_64-unknown-linux-gnu
+            zigtarget: x86_64-unknown-linux-gnu.2.39
           - os: ubuntu-24.04-arm
             arch: arm64
+            target: aarch64-unknown-linux-gnu
+            zigtarget: aarch64-unknown-linux-gnu.2.39
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -26,13 +30,16 @@ jobs:
         run: sudo apt-get install -y libreadline-dev uuid-dev
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
+      # Pin glibc 2.39 via cargo-zigbuild so the binary boots on noble (24.04)
+      # and never links a newer glibc symbol from the runner. Pure-Rust crate,
+      # but we keep glibc (not musl) for a reliable internal-DNS resolver.
       - name: build
-        run: cargo build --release --bin beyond-queue
+        run: cargo zigbuild --release --target ${{ matrix.zigtarget }} -p beyond-queue
       - name: package
         run: |
           VERSION=${GITHUB_REF_NAME#api-v}
           tar -czf beyond-queue-v${VERSION}-linux-${{ matrix.arch }}.tar.gz \
-            -C target/release beyond-queue
+            -C target/${{ matrix.target }}/release beyond-queue
       - uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.arch }}
