@@ -23,9 +23,10 @@ already uses. One new table, zero new pgrx functions, one new SDK verb.
   built.
 - **Forks with the rest of the platform.** Schedules live in user
   Postgres, on the user's GlideFS volume.
-- **Trivial idle cost.** The scheduler worker is always on but polls a
-  partial index `WHERE status = 'active'`; an empty schedule table costs
-  one sub-millisecond index probe per poll cycle.
+- **Zero idle cost.** The scheduler worker is event-driven: with no active
+  schedules it parks and issues no queries at all, so the queue (and Postgres)
+  scale to zero. With schedules active it sleeps until the next `next_fire_at`
+  (a partial-index probe on `WHERE status = 'active'`), not on a fixed poll.
 - The minimum effective surface. One table, one worker, three expression
   forms, three target kinds.
 
@@ -57,33 +58,44 @@ into a workflow is the same fanout a topic does.
 
 ## The runtime model
 
-The queue server is platform infrastructure. It runs alongside the user's
-Postgres on their GlideFS volume and does not scale to zero — same as the
-database. Users don't pay for it any more than they pay for Postgres being up.
+The queue server scales to zero with the app. The platform sleeps an idle VM
+(no network traffic for ~5 min → light sleep → deep sleep), and the queue
+server is built so an idle app generates no traffic: the schedule worker only
+talks to Postgres when there is work to do (see _Worker lifecycle_). When no
+schedules are active and no deliveries are pending, the queue VM goes idle and
+sleeps — and because the queue is the only thing querying it, Postgres sleeps
+too.
+
+While any schedule **is** active, the worker re-checks Postgres at least every
+~`KEEPALIVE_CAP` (kept under the light-sleep window). Those checks are network
+traffic to Postgres, so both VMs stay awake and the fire lands on time — the
+keepalive is just the re-check the worker has to do anyway, not a separate
+mechanism. So: idle app → both sleep; app with schedules → both awake until the
+schedules are paused/deleted.
 
 Function VMs — user code — sleep when idle. When a schedule fires, the
 scheduler worker (running in the queue server) calls `queue.send` or
 `queue.publish_event`. The fan-out sends HTTP to the function VM's endpoint.
 The gateway sees a sleeping VM, wakes it, delivers the request. The function
-processes it and goes back to sleep.
-
-No special wakeup mechanism. No external scheduler. HTTP fan-out handles
-sleeping function VMs as a natural consequence of the existing wake-on-traffic
-machinery — the same path any other inbound request takes.
+processes it and goes back to sleep — the same wake-on-traffic path any other
+inbound request takes.
 
 ### Worker lifecycle
 
-The scheduler worker starts at queue server boot and runs for the lifetime
-of the process. Its idle cost is one partial-index probe per poll cycle —
-sub-millisecond on an empty `schedule_due_idx` — so chasing "zero overhead"
-by stopping the worker when no schedules exist would add intra-process
-signaling complexity without measurable benefit. Same pattern as the HTTP
-delivery worker.
+The scheduler worker starts at queue server boot and runs for the lifetime of
+the process, but it is **event-driven, not a fixed poll**. Each cycle it fires
+everything currently due, then sleeps until the earliest active schedule's
+`next_fire_at` (capped at `KEEPALIVE_CAP`), woken early in-process when a
+`/schedules` mutation changes the table. When there are no active schedules it
+parks entirely — zero queries, zero traffic — so the VM can sleep. The HTTP
+delivery worker follows the same shape, keyed on `event_deliveries`.
 
 On boot, the worker runs one catchup pass (firing any missed occurrences
 for active schedules subject to each schedule's `catchup` and
-`catchup_limit` settings) before entering the normal poll loop. This
-covers fires missed while the queue server was down.
+`catchup_limit` settings) before entering the normal loop. This covers fires
+missed while the queue server was down or asleep. (Light sleep is a
+pause/resume, not a restart, so it does not re-run catchup; while schedules are
+active the VM stays awake anyway, so no fire is missed.)
 
 ---
 

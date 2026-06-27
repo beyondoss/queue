@@ -108,6 +108,8 @@ async fn start_tls_server(certs: &CertBundle) -> String {
         coalescer: None,
         signer: Arc::new(beyond_queue::signing::Signer::generate().unwrap()),
         metrics: Arc::new(beyond_queue::metrics::Metrics::new()),
+        delivery_notify: Arc::new(tokio::sync::Notify::new()),
+        schedule_notify: Arc::new(tokio::sync::Notify::new()),
     });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

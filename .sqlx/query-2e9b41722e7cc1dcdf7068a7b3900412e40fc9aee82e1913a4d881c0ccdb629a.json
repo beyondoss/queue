@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now()))::float8 AS \"secs\"\n           FROM queue.event_deliveries\n           WHERE attempt < max_attempts",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "secs",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2e9b41722e7cc1dcdf7068a7b3900412e40fc9aee82e1913a4d881c0ccdb629a"
+}

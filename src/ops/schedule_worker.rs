@@ -1,8 +1,12 @@
-//! Schedule worker — polls `queue.schedule` for due rows and fires them.
+//! Schedule worker — fires due rows in `queue.schedule`.
 //!
-//! Mirrors `ops::delivery` in shape: pure polling loop, no LISTEN/NOTIFY,
-//! configured via env, gracefully aborted on shutdown. Always on; an
-//! empty schedule table costs one partial-index probe per poll.
+//! Event-driven: it fires everything currently due, then sleeps until the
+//! earliest active schedule's `next_fire_at` (capped — see [`KEEPALIVE_CAP`]),
+//! woken early in-process via `notify` when a `/schedules` mutation changes the
+//! table. When there are no active schedules it parks and generates no traffic,
+//! letting the VM (and Postgres) scale to zero. When schedules *do* exist, the
+//! periodic re-check is itself a query to Postgres, which keeps both VMs awake
+//! so fires land on time — no separate keepalive mechanism.
 //!
 //! Per-row failure isolation via `SAVEPOINT`: an individual dispatch
 //! failure (target queue missing, malformed payload) rolls back only
@@ -17,11 +21,30 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::metrics::Metrics;
 use crate::ops::schedule::{self, ScheduleRow};
 use crate::schedule::expression::{Canonical, Expression};
+
+/// Upper bound on how long the worker sleeps while any active schedule exists.
+/// Kept safely under the instance light-sleep window (300s for primitives), so a
+/// far-off `next_fire_at` still produces a re-check every ~cap — traffic that
+/// keeps the queue and Postgres VMs awake so the fire lands on time.
+const KEEPALIVE_CAP: Duration = Duration::from_secs(240);
+
+/// When no schedule is active, park this long before a defensive re-probe.
+/// Mutations are signalled in-process via `notify`, so this is only a backstop;
+/// longer than the light-sleep window so an idle VM sleeps in the gap.
+const IDLE_PARK: Duration = Duration::from_secs(3600);
+
+/// Floor on the sleep between fire cycles. A fire that *fails* does not advance
+/// the row's `next_fire_at`, so the row stays due and would otherwise be
+/// re-claimed with zero delay — a hot loop that hammers the pool until the
+/// schedule hits `failure_threshold`. Flooring the re-check rate-limits that
+/// (and back-to-back catch-up batches) to a sane cadence.
+const MIN_RECHECK: Duration = Duration::from_millis(250);
 
 pub struct ScheduleWorkerConfig {
     pub poll_interval_ms: u64,
@@ -37,25 +60,70 @@ impl Default for ScheduleWorkerConfig {
     }
 }
 
-pub fn start(pool: PgPool, config: ScheduleWorkerConfig, _metrics: Arc<Metrics>) -> JoinHandle<()> {
-    tokio::spawn(run(pool, config))
+pub fn start(
+    pool: PgPool,
+    config: ScheduleWorkerConfig,
+    _metrics: Arc<Metrics>,
+    notify: Arc<Notify>,
+    delivery_notify: Arc<Notify>,
+) -> JoinHandle<()> {
+    tokio::spawn(run(pool, config, notify, delivery_notify))
 }
 
-async fn run(pool: PgPool, config: ScheduleWorkerConfig) {
+async fn run(
+    pool: PgPool,
+    config: ScheduleWorkerConfig,
+    notify: Arc<Notify>,
+    delivery_notify: Arc<Notify>,
+) {
     loop {
         match poll_once(&pool, &config).await {
-            Ok(fired) => {
-                if fired == 0 {
-                    tokio::time::sleep(Duration::from_millis(config.poll_interval_ms)).await;
-                }
-                // If we fired any, loop immediately — there may be more.
-            }
+            // A topic target may have created deliveries — wake that worker.
+            Ok(fired) if fired > 0 => delivery_notify.notify_one(),
+            Ok(_) => {}
             Err(e) => {
                 tracing::error!(error = %e, "schedule worker poll failed");
-                tokio::time::sleep(Duration::from_millis(config.poll_interval_ms)).await;
+                wait_or_notified(Duration::from_millis(config.poll_interval_ms), &notify).await;
+                continue;
             }
         }
+
+        // Sleep until the next fire. A still-due row (more catch-up work, or a
+        // failed fire that didn't advance) reports ~0s; the MIN_RECHECK floor
+        // turns that into a paced retry instead of a hot loop.
+        let wait = match earliest_active_fire_in(&pool).await {
+            Ok(Some(secs)) => {
+                Duration::from_secs_f64(secs.max(0.0)).clamp(MIN_RECHECK, KEEPALIVE_CAP)
+            }
+            Ok(None) => IDLE_PARK,
+            Err(e) => {
+                tracing::warn!(error = %e, "schedule next-due probe failed");
+                Duration::from_millis(config.poll_interval_ms)
+            }
+        };
+        wait_or_notified(wait, &notify).await;
     }
+}
+
+/// Sleep for `dur`, returning early if `notify` is poked.
+async fn wait_or_notified(dur: Duration, notify: &Notify) {
+    tokio::select! {
+        _ = tokio::time::sleep(dur) => {}
+        _ = notify.notified() => {}
+    }
+}
+
+/// Seconds until the earliest active schedule is due (`None` if no active
+/// schedules). Negative values mean already-due.
+async fn earliest_active_fire_in(pool: &PgPool) -> anyhow::Result<Option<f64>> {
+    let row = sqlx::query!(
+        r#"SELECT EXTRACT(EPOCH FROM (MIN(next_fire_at) - now()))::float8 AS "secs"
+           FROM queue.schedule
+           WHERE status = 'active'"#
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.secs)
 }
 
 /// One poll cycle: claim due rows, fire each in a savepoint, commit.

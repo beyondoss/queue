@@ -39,6 +39,7 @@ pub async fn create_schedule(
     let preview_count = state.config.schedule_preview_count;
     let name = spec.name.clone();
     let sched = schedule::create(&state.pool, spec, preview_count).await?;
+    state.schedule_notify.notify_one();
     Ok((StatusCode::CREATED, location_header(&name), Json(sched)))
 }
 
@@ -123,6 +124,7 @@ pub async fn upsert_schedule(
         state.config.schedule_preview_count,
     )
     .await?;
+    state.schedule_notify.notify_one();
     let status = if created {
         StatusCode::CREATED
     } else {
@@ -179,6 +181,7 @@ pub async fn patch_schedule(
             state.config.schedule_preview_count,
         )
         .await?;
+        state.schedule_notify.notify_one();
         return Ok(Json(sched));
     }
 
@@ -189,6 +192,7 @@ pub async fn patch_schedule(
         state.config.schedule_preview_count,
     )
     .await?;
+    state.schedule_notify.notify_one();
     Ok(Json(sched))
 }
 
@@ -210,6 +214,7 @@ pub async fn delete_schedule(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     schedule::delete(&state.pool, &name).await?;
+    state.schedule_notify.notify_one();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -234,6 +239,8 @@ pub async fn run_schedule(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let run = schedule::run_now(&state.pool, &name).await?;
+    // A topic target may have created deliveries; wake the delivery worker.
+    state.delivery_notify.notify_one();
     Ok((StatusCode::ACCEPTED, Json(run)))
 }
 
