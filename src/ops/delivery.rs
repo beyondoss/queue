@@ -4,10 +4,17 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use reqwest::Client;
 use sqlx::PgPool;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
 use crate::metrics::Metrics;
+
+/// When no delivery is pending, park this long before a defensive re-probe. New
+/// deliveries are signalled in-process via `notify`, so this is only a backstop;
+/// it is deliberately longer than the instance light-sleep window so an idle VM
+/// sleeps in the gap rather than waking itself to poll.
+const IDLE_PARK: Duration = Duration::from_secs(3600);
 
 pub struct DeliveryConfig {
     pub poll_interval_ms: u64,
@@ -29,26 +36,69 @@ pub fn start(
     pool: PgPool,
     config: DeliveryConfig,
     metrics: Arc<Metrics>,
+    notify: Arc<Notify>,
 ) -> anyhow::Result<JoinHandle<()>> {
     let client = Client::builder()
         .timeout(Duration::from_secs(config.delivery_timeout_secs))
         .build()?;
-    Ok(tokio::spawn(run(pool, client, config, metrics)))
+    Ok(tokio::spawn(run(pool, client, config, metrics, notify)))
 }
 
-async fn run(pool: PgPool, client: Client, config: DeliveryConfig, metrics: Arc<Metrics>) {
+/// Event-driven delivery loop. Drains all due deliveries, then sleeps until the
+/// earliest pending retry (or parks if none) — woken early by `notify` when a
+/// publish inserts new deliveries. When the table is empty it generates no
+/// traffic, letting the VM (and Postgres) scale to zero.
+async fn run(
+    pool: PgPool,
+    client: Client,
+    config: DeliveryConfig,
+    metrics: Arc<Metrics>,
+    notify: Arc<Notify>,
+) {
     loop {
         match deliver_batch(&pool, &client, &config, &metrics).await {
-            Ok(0) => {
-                tokio::time::sleep(Duration::from_millis(config.poll_interval_ms)).await;
-            }
+            // A full-ish batch may mean more is due right now — loop immediately.
+            Ok(n) if n > 0 => continue,
+            // Nothing due — fall through to wait for the next due time / a poke.
             Ok(_) => {}
             Err(e) => {
                 tracing::error!(error = %e, "http delivery batch error");
-                tokio::time::sleep(Duration::from_millis(config.poll_interval_ms)).await;
+                wait_or_notified(Duration::from_millis(config.poll_interval_ms), &notify).await;
+                continue;
             }
         }
+
+        let wait = match earliest_pending_in(&pool).await {
+            Ok(Some(secs)) => Duration::from_secs_f64(secs.max(0.0)),
+            Ok(None) => IDLE_PARK,
+            Err(e) => {
+                tracing::warn!(error = %e, "delivery next-due probe failed");
+                Duration::from_millis(config.poll_interval_ms)
+            }
+        };
+        wait_or_notified(wait, &notify).await;
     }
+}
+
+/// Sleep for `dur`, returning early if `notify` is poked.
+async fn wait_or_notified(dur: Duration, notify: &Notify) {
+    tokio::select! {
+        _ = tokio::time::sleep(dur) => {}
+        _ = notify.notified() => {}
+    }
+}
+
+/// Seconds until the earliest deliverable row becomes due (`None` if there are
+/// no rows with attempts remaining). Negative values mean already-due.
+async fn earliest_pending_in(pool: &PgPool) -> anyhow::Result<Option<f64>> {
+    let row = sqlx::query!(
+        r#"SELECT EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now()))::float8 AS "secs"
+           FROM queue.event_deliveries
+           WHERE attempt < max_attempts"#
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.secs)
 }
 
 async fn deliver_batch(

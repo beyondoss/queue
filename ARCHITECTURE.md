@@ -194,7 +194,7 @@ The signature follows the SNS v2 spec: alphabetically sorted field name/value pa
 
 Both steps happen inside the same HTTP handler (`src/ops/event.rs`). The SQS fan-out is synchronous; HTTP deliveries are asynchronous (picked up by the delivery worker).
 
-The delivery worker (`src/ops/delivery.rs`) polls `http_deliveries` in a background task. Each poll opens a transaction, fetches pending rows with `FOR UPDATE SKIP LOCKED`, POSTs to each endpoint, and deletes on success or updates `attempt` / `next_attempt_at` on failure. Backoff schedule: 10s → 30s → 60s → 300s. Exhausted rows (`attempt >= max_attempts`) stay for inspection; no automatic reaping.
+The delivery worker (`src/ops/delivery.rs`) is event-driven. Each cycle it opens a transaction, fetches pending rows with `FOR UPDATE SKIP LOCKED`, POSTs to each endpoint, and deletes on success or updates `attempt` / `next_attempt_at` on failure. When a batch comes back empty it sleeps until the earliest pending row's `next_attempt_at` (or parks if the table is empty), woken early in-process when a publish inserts new deliveries — so an idle queue issues no queries and can scale to zero. Backoff schedule: 10s → 30s → 60s → 300s. Rows that exhaust all attempts (`attempt >= max_attempts`) are swept at the end of a delivery batch — deleted, logged, and counted via `delivery_exhausted_total` — so dead letters surface in logs/metrics instead of silently accumulating.
 
 **REST API subscriptions** default to `raw_delivery=true` (raw payload). Opt in to the SNS envelope with `"envelope": true` in the subscribe body. **SNS wire protocol subscriptions** default to `raw_delivery=false` (envelope); set `RawMessageDelivery=true` via `SetSubscriptionAttributes` to switch.
 
@@ -205,7 +205,7 @@ Bindings are stored in `queue.topic_subscriptions` with columns `protocol`, `end
 
 ### Schedules (time-based triggers)
 
-`queue.schedule` is a single table indexed by `(next_fire_at) WHERE status = 'active'`. The scheduler worker (`src/ops/schedule_worker.rs`) polls it every `QUEUE_SCHEDULE_POLL_MS` (default 1000ms):
+`queue.schedule` is a single table indexed by `(next_fire_at) WHERE status = 'active'`. The scheduler worker (`src/ops/schedule_worker.rs`) is event-driven: each cycle it fires everything due, then sleeps until the earliest active schedule's `next_fire_at` (capped at `KEEPALIVE_CAP`, under the instance light-sleep window so the VM stays awake while schedules are active and the fire lands on time), woken early in-process by any `/schedules` mutation. With no active schedules it parks and issues no queries, so the queue and Postgres scale to zero. Each firing cycle:
 
 1. Open transaction, claim up to `QUEUE_SCHEDULE_BATCH_SIZE` due rows with `FOR UPDATE SKIP LOCKED ORDER BY next_fire_at`.
 2. For each row, open a `SAVEPOINT`, then dispatch by `target_kind`:
@@ -220,7 +220,7 @@ Every fired message carries `headers._schedule = { name, scheduled_for, out_of_b
 
 Schedule expressions accept four shapes (`cron`, `every`, `when`, `fire_at`); the parser layer (`src/schedule/`) canonicalizes each to either a cron string + timezone or a single UTC instant before storage. Dry-runs via `POST /v1/previews` round-trip the canonical form, a `human_readable` description, and the next N fire times — the agent-affordance that catches the "I wrote `0 9 *` and it doesn't do what I think" class of mistake before commit.
 
-The worker is always on and trivially cheap when idle: an empty partial index probe per poll cycle, sub-millisecond.
+The worker runs for the process lifetime but does no work when idle: with no active schedules it parks on an in-process notification and issues zero queries, letting the VM sleep. `QUEUE_SCHEDULE_POLL_MS` is now only the retry backoff after a transient error, not a steady-state poll interval.
 
 ### Write coalescer
 
@@ -289,27 +289,27 @@ Within the selected group, messages are delivered in `msg_id ASC` order (FIFO).
 
 ## Configuration
 
-| Variable                           | Default                  | What It Controls                                                                                                                 |
-| ---------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                     | (required)               | PostgreSQL connection string passed to sqlx `PgPoolOptions`.                                                                     |
-| `QUEUE_ADDRESS`                    | `0.0.0.0:9324`           | TCP bind address for the HTTP server.                                                                                            |
-| `QUEUE_DEFAULT_VISIBILITY_TIMEOUT` | `30`                     | Seconds applied when a `ReceiveMessage` request omits `VisibilityTimeout`.                                                       |
-| `QUEUE_MAX_CONNECTIONS`            | `10`                     | Hard cap on the sqlx connection pool. Excess operations wait for a free slot.                                                    |
-| `LOG_LEVEL`                        | `info`                   | `EnvFilter` directive (e.g. `beyond_queue=debug,info`). JSON-structured output.                                                  |
-| `OTLP_ENABLED`                     | `false`                  | Enable OpenTelemetry OTLP trace export over gRPC.                                                                                |
-| `OTLP_ENDPOINT`                    | `http://localhost:4317`  | gRPC OTLP collector. Used when `OTLP_ENABLED=true`.                                                                              |
-| `OTLP_SAMPLE_RATE`                 | `0.1`                    | Fraction of traces sampled (0.0 = never, 1.0 = always). Only effective when `OTLP_ENABLED=true`.                                 |
-| `QUEUE_LINGER_MS`                  | `0`                      | Write coalescer window (ms). Non-FIFO sends are held up to this duration and flushed as a single batch. `0` disables coalescing. |
-| `QUEUE_BASE_URL`                   | `http://{QUEUE_ADDRESS}` | Base URL for SQS queue URLs returned to clients (`{QUEUE_BASE_URL}/000000000000/{name}`). Override when behind a proxy.          |
-| `QUEUE_HTTP_DELIVERY_ENABLED`      | `true`                   | Enable the background HTTP/HTTPS delivery worker.                                                                                |
-| `QUEUE_HTTP_DELIVERY_POLL_MS`      | `1000`                   | Delivery worker poll interval (ms). Lower values increase responsiveness at the cost of idle DB load.                            |
-| `QUEUE_HTTP_DELIVERY_TIMEOUT_SECS` | `5`                      | Per-request timeout for outbound webhook POSTs.                                                                                  |
-| `QUEUE_HTTP_DELIVERY_BATCH_SIZE`   | `50`                     | Maximum rows the delivery worker claims per poll cycle. Tune up under high SNS fanout load.                                      |
-| `QUEUE_SCHEDULE_ENABLED`           | `true`                   | Enable the background schedule worker (cron / every / when triggers).                                                            |
-| `QUEUE_SCHEDULE_POLL_MS`           | `1000`                   | Schedule worker poll interval (ms). Floor on fire latency; idle cost is one sub-millisecond partial-index probe per cycle.       |
-| `QUEUE_SCHEDULE_BATCH_SIZE`        | `32`                     | Maximum rows the schedule worker claims per poll cycle.                                                                          |
-| `QUEUE_SCHEDULE_PREVIEW_COUNT`     | `5`                      | Number of upcoming fire timestamps projected in `next_fires` on schedule and preview responses.                                  |
-| `QUEUE_SCHEDULE_LIST_MAX`          | `1000`                   | Hard cap on `GET /v1/schedules` response size.                                                                                   |
+| Variable                           | Default                  | What It Controls                                                                                                                                                                                                                    |
+| ---------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                     | (required)               | PostgreSQL connection string passed to sqlx `PgPoolOptions`.                                                                                                                                                                        |
+| `QUEUE_ADDRESS`                    | `0.0.0.0:9324`           | TCP bind address for the HTTP server.                                                                                                                                                                                               |
+| `QUEUE_DEFAULT_VISIBILITY_TIMEOUT` | `30`                     | Seconds applied when a `ReceiveMessage` request omits `VisibilityTimeout`.                                                                                                                                                          |
+| `QUEUE_MAX_CONNECTIONS`            | `10`                     | Hard cap on the sqlx connection pool. Excess operations wait for a free slot.                                                                                                                                                       |
+| `LOG_LEVEL`                        | `info`                   | `EnvFilter` directive (e.g. `beyond_queue=debug,info`). JSON-structured output.                                                                                                                                                     |
+| `OTLP_ENABLED`                     | `false`                  | Enable OpenTelemetry OTLP trace export over gRPC.                                                                                                                                                                                   |
+| `OTLP_ENDPOINT`                    | `http://localhost:4317`  | gRPC OTLP collector. Used when `OTLP_ENABLED=true`.                                                                                                                                                                                 |
+| `OTLP_SAMPLE_RATE`                 | `0.1`                    | Fraction of traces sampled (0.0 = never, 1.0 = always). Only effective when `OTLP_ENABLED=true`.                                                                                                                                    |
+| `QUEUE_LINGER_MS`                  | `0`                      | Write coalescer window (ms). Non-FIFO sends are held up to this duration and flushed as a single batch. `0` disables coalescing.                                                                                                    |
+| `QUEUE_BASE_URL`                   | `http://{QUEUE_ADDRESS}` | Base URL for SQS queue URLs returned to clients (`{QUEUE_BASE_URL}/000000000000/{name}`). Override when behind a proxy.                                                                                                             |
+| `QUEUE_HTTP_DELIVERY_ENABLED`      | `true`                   | Enable the background HTTP/HTTPS delivery worker.                                                                                                                                                                                   |
+| `QUEUE_HTTP_DELIVERY_POLL_MS`      | `1000`                   | Retry backoff (ms) after a transient delivery-batch error. Not a steady-state poll: the worker is event-driven (sleeps until the next `next_attempt_at`, woken in-process on publish).                                              |
+| `QUEUE_HTTP_DELIVERY_TIMEOUT_SECS` | `5`                      | Per-request timeout for outbound webhook POSTs.                                                                                                                                                                                     |
+| `QUEUE_HTTP_DELIVERY_BATCH_SIZE`   | `50`                     | Maximum rows the delivery worker claims per poll cycle. Tune up under high SNS fanout load.                                                                                                                                         |
+| `QUEUE_SCHEDULE_ENABLED`           | `true`                   | Enable the background schedule worker (cron / every / when triggers).                                                                                                                                                               |
+| `QUEUE_SCHEDULE_POLL_MS`           | `1000`                   | Retry backoff (ms) after a transient schedule-poll error. Not a steady-state poll: the worker is event-driven (sleeps until the next `next_fire_at`, capped under the light-sleep window, woken in-process on `/schedules` writes). |
+| `QUEUE_SCHEDULE_BATCH_SIZE`        | `32`                     | Maximum rows the schedule worker claims per poll cycle.                                                                                                                                                                             |
+| `QUEUE_SCHEDULE_PREVIEW_COUNT`     | `5`                      | Number of upcoming fire timestamps projected in `next_fires` on schedule and preview responses.                                                                                                                                     |
+| `QUEUE_SCHEDULE_LIST_MAX`          | `1000`                   | Hard cap on `GET /v1/schedules` response size.                                                                                                                                                                                      |
 
 ---
 

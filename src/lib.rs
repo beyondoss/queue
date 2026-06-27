@@ -56,6 +56,13 @@ pub struct AppState {
     /// RSA-2048 signer for SNS notification envelopes.
     pub signer: Arc<Signer>,
     pub metrics: Arc<Metrics>,
+    /// In-process wakeup for the HTTP-delivery worker. Poked after a publish
+    /// inserts `event_deliveries` rows so the worker re-checks immediately
+    /// instead of waiting out its sleep-until-next-due timer.
+    pub delivery_notify: Arc<tokio::sync::Notify>,
+    /// In-process wakeup for the schedule worker. Poked after any `/schedules`
+    /// mutation so the worker recomputes its next-fire deadline immediately.
+    pub schedule_notify: Arc<tokio::sync::Notify>,
 }
 
 /// Parse an AWS service request body: returns `Ok((is_json, action_name, parsed_body))`.
@@ -163,6 +170,13 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let pool = db::connect(&config.database_url, config.max_connections).await?;
     let metrics = Arc::new(Metrics::new());
 
+    // In-process wakeups: route handlers poke these after writing the tables the
+    // workers watch, so the workers re-check immediately instead of polling.
+    // Primitives run single-instance (max=1), so one process = one set of
+    // workers — no cross-replica notification needed.
+    let delivery_notify = Arc::new(tokio::sync::Notify::new());
+    let schedule_notify = Arc::new(tokio::sync::Notify::new());
+
     let delivery_handle = if config.http_delivery_enabled {
         tracing::info!("HTTP delivery worker enabled");
         Some(ops::delivery::start(
@@ -173,6 +187,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
                 batch_size: config.http_delivery_batch_size,
             },
             metrics.clone(),
+            delivery_notify.clone(),
         )?)
     } else {
         None
@@ -187,12 +202,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
                 batch_size: config.schedule_batch_size,
             },
             metrics.clone(),
+            schedule_notify.clone(),
+            delivery_notify.clone(),
         ))
     } else {
         None
     };
-
-    let scrape_handle = start_queue_depth_scrape(pool.clone(), metrics.clone());
 
     // 5. TLS validation (up-front; misconfig surfaces immediately).
     let tls_parts = match (&config.tls_cert, &config.tls_key, &config.tls_ca) {
@@ -219,6 +234,8 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         signer: signer.clone(),
         base_url: base_url.clone(),
         metrics: metrics.clone(),
+        delivery_notify: delivery_notify.clone(),
+        schedule_notify: schedule_notify.clone(),
     };
     let rt = Handle::current();
     let (initial_state, coalescer_handle) = rebuild.build_state(&rt);
@@ -371,8 +388,6 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         jh.abort();
         let _ = jh.await;
     }
-    scrape_handle.abort();
-    let _ = scrape_handle.await;
 
     tracing::info!("shutdown complete");
     Ok(())
@@ -658,6 +673,28 @@ async fn record_metrics(State(state): State<AppState>, req: Request, next: Next)
 }
 
 async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    // Refresh queue-depth gauges on demand rather than from a background poll.
+    // A background scrape loop would generate continuous queue→Postgres traffic
+    // and pin both VMs awake; computing here means an idle (unscraped) VM stays
+    // silent and can scale to zero. Best-effort: if Postgres is unreachable,
+    // serve the rest of the metrics anyway.
+    match ops::queue_admin::all_queue_depths(&state.pool).await {
+        Ok(snapshots) => {
+            for s in snapshots {
+                state
+                    .metrics
+                    .queue_depth
+                    .with_label_values(&[&s.queue_name])
+                    .set(s.visible as f64);
+                state
+                    .metrics
+                    .queue_in_flight
+                    .with_label_values(&[&s.queue_name])
+                    .set(s.in_flight as f64);
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "on-demand queue depth refresh failed"),
+    }
     (
         StatusCode::OK,
         [(
@@ -722,27 +759,4 @@ async fn healthz_ready(State(state): State<AppState>) -> impl IntoResponse {
         )
             .into_response()
     }
-}
-
-fn start_queue_depth_scrape(pool: PgPool, metrics: Arc<Metrics>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match ops::queue_admin::all_queue_depths(&pool).await {
-                Ok(snapshots) => {
-                    for s in snapshots {
-                        metrics
-                            .queue_depth
-                            .with_label_values(&[&s.queue_name])
-                            .set(s.visible as f64);
-                        metrics
-                            .queue_in_flight
-                            .with_label_values(&[&s.queue_name])
-                            .set(s.in_flight as f64);
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "queue depth scrape failed"),
-            }
-            tokio::time::sleep(Duration::from_secs(15)).await;
-        }
-    })
 }

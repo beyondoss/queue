@@ -92,6 +92,10 @@ pub async fn publish_event(
     event::queue_event_deliveries(&state.pool, &routing_key, &body.message, Some(&envelope))
         .await?;
 
+    // Wake the delivery worker so it dispatches immediately instead of waiting
+    // out its sleep-until-next-due timer.
+    state.delivery_notify.notify_one();
+
     Ok((
         StatusCode::CREATED,
         Json(TopicSendResponse {

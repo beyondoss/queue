@@ -96,11 +96,16 @@ async fn test_http_delivery_retry_on_failure() {
 
 #[tokio::test]
 async fn test_http_delivery_unsubscribe_cancels_pending() {
-    let _ = test_env();
+    let env = test_env();
     let client = TestClient::new();
-    let webhook = crate::helpers::TestWebhook::start().await;
+    // The first attempt returns 500, so the delivery row survives in backoff
+    // (next_attempt_at pushed ~10s out) — giving unsubscribe a *pending* row to
+    // cancel. A 200 would be delivered-and-deleted immediately, since publish
+    // now wakes the delivery worker in-process (delivery is prompt, not polled),
+    // so "publish then unsubscribe" no longer cancels the first attempt — only
+    // not-yet-due retries. This test asserts that cancellation guarantee.
+    let webhook = crate::helpers::TestWebhook::with_status_sequence(vec![500]).await;
 
-    // Subscribe and get the subscription id from the response
     let sub = client
         .post(
             "/v1/events/cancel.*/subscriptions",
@@ -111,7 +116,7 @@ async fn test_http_delivery_unsubscribe_cancels_pending() {
         .json::<serde_json::Value>();
     let sub_id = sub["id"].as_i64().expect("subscription id");
 
-    // Publish — creates an http_deliveries row
+    // Publish — creates an event_deliveries row; the worker attempts it promptly.
     client
         .post(
             "/v1/events/cancel.me",
@@ -120,18 +125,31 @@ async fn test_http_delivery_unsubscribe_cancels_pending() {
         .await
         .assert_status(201);
 
-    // Unsubscribe — CASCADE deletes http_deliveries rows
+    // Wait for the first (failing) attempt so the row is now in backoff, pending.
+    webhook.wait_for(1, std::time::Duration::from_secs(5)).await;
+
+    // Unsubscribe — CASCADE deletes the pending (backing-off) delivery row.
     client
         .delete(&format!("/v1/events/cancel.*/subscriptions/{sub_id}"))
         .await
         .assert_status(204);
 
-    // Give worker a moment to see the empty table — delivery should NOT arrive
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // The pending row is gone, so the ~10s retry never fires. Scope the count to
+    // this test's endpoint — the integration DB is shared across tests.
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM queue.event_deliveries WHERE endpoint = $1")
+            .bind(&webhook.url)
+            .fetch_one(&env.pool)
+            .await
+            .expect("count event_deliveries");
+    assert_eq!(
+        remaining, 0,
+        "unsubscribe should CASCADE-delete pending deliveries"
+    );
     assert_eq!(
         webhook.received_count(),
-        0,
-        "delivery should have been cancelled"
+        1,
+        "only the initial failed attempt should have fired; the retry was cancelled"
     );
 }
 
@@ -161,47 +179,69 @@ async fn test_http_delivery_dead_letter() {
         .await
         .assert_status(201);
 
-    // Wait for the first delivery attempt to be recorded.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Poll until the first failed attempt is recorded (attempt incremented),
+    // scoped to this test's endpoint (the integration DB is shared across tests).
+    // wait_for() alone is too early — it fires when the webhook receives the POST,
+    // before the worker commits the failure.
+    let mut row_id: Option<i64> = None;
+    for _ in 0..50 {
+        let r = sqlx::query!(
+            r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.event_deliveries
+               WHERE endpoint = $1 ORDER BY id DESC LIMIT 1"#,
+            webhook.url,
+        )
+        .fetch_optional(&env.pool)
+        .await
+        .unwrap();
+        if let Some(r) = r
+            && r.attempt >= 1
+        {
+            row_id = Some(r.id);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let row_id = row_id.expect("delivery worker should have recorded a failed attempt");
 
-    // The row should exist with attempt >= 1.
-    let row = sqlx::query!(
-        r#"SELECT id AS "id!", attempt AS "attempt!" FROM queue.event_deliveries
-           WHERE endpoint = $1 ORDER BY id DESC LIMIT 1"#,
-        webhook.url,
-    )
-    .fetch_optional(&env.pool)
-    .await
-    .unwrap()
-    .expect("expected an http_deliveries row after first attempt");
-    assert!(
-        row.attempt >= 1,
-        "delivery worker should have attempted at least once"
-    );
-
-    // Fast-forward: set attempt = max_attempts to simulate exhaustion.
+    // Fast-forward this row to exhaustion.
     sqlx::query!(
         "UPDATE queue.event_deliveries SET attempt = max_attempts WHERE id = $1",
-        row.id,
+        row_id,
     )
     .execute(&env.pool)
     .await
     .unwrap();
 
-    // Give the worker a couple of poll cycles.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Publish a fresh event to the same endpoint to drive another delivery batch.
+    // The exhausted-row sweep runs at the end of each batch and discards
+    // dead-lettered rows (deleted + logged + counted) so they don't accumulate.
+    client
+        .post(
+            "/v1/events/deadletter.test",
+            &serde_json::json!({ "message": { "fail": true } }),
+        )
+        .await
+        .assert_status(201);
 
-    // Row must still exist — exhausted rows are retained for inspection, not deleted.
-    let still_there = sqlx::query!(
-        r#"SELECT id AS "id!" FROM queue.event_deliveries WHERE id = $1"#,
-        row.id,
-    )
-    .fetch_optional(&env.pool)
-    .await
-    .unwrap();
+    // The dead-lettered row is swept; poll until it's gone.
+    let mut swept = false;
+    for _ in 0..50 {
+        let still = sqlx::query!(
+            r#"SELECT id AS "id!" FROM queue.event_deliveries WHERE id = $1"#,
+            row_id,
+        )
+        .fetch_optional(&env.pool)
+        .await
+        .unwrap();
+        if still.is_none() {
+            swept = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     assert!(
-        still_there.is_some(),
-        "dead-lettered row must remain for inspection"
+        swept,
+        "exhausted (dead-lettered) row should be swept by the delivery worker"
     );
 }
 

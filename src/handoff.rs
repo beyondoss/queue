@@ -63,6 +63,8 @@ pub struct Rebuild {
     pub signer: Arc<Signer>,
     pub base_url: Arc<str>,
     pub metrics: Arc<Metrics>,
+    pub delivery_notify: Arc<tokio::sync::Notify>,
+    pub schedule_notify: Arc<tokio::sync::Notify>,
 }
 
 impl Rebuild {
@@ -89,6 +91,8 @@ impl Rebuild {
             coalescer,
             signer: self.signer.clone(),
             metrics: self.metrics.clone(),
+            delivery_notify: self.delivery_notify.clone(),
+            schedule_notify: self.schedule_notify.clone(),
         };
         (state, coalescer_jh)
     }

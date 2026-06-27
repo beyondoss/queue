@@ -58,6 +58,8 @@ pub async fn start_with_coalescer(pool: PgPool, linger_ms: u64) -> anyhow::Resul
         coalescer: Some(coalescer),
         signer,
         metrics,
+        delivery_notify: Arc::new(tokio::sync::Notify::new()),
+        schedule_notify: Arc::new(tokio::sync::Notify::new()),
     };
     let app = crate::build_router(state);
 
@@ -107,6 +109,11 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         handoff_socket_path: std::path::PathBuf::from("/tmp/queue-test-unused.sock"),
     };
 
+    // Shared in-process wakeups: the same handles the route handlers poke must
+    // be the ones the workers wait on, so the test server wires them together.
+    let delivery_notify = Arc::new(tokio::sync::Notify::new());
+    let schedule_notify = Arc::new(tokio::sync::Notify::new());
+
     // Start delivery worker with fast poll for tests; detach the handle since
     // tokio keeps the task alive until the runtime shuts down.
     drop(delivery::start(
@@ -117,6 +124,7 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
             batch_size: 50,
         },
         Arc::new(crate::metrics::Metrics::new()),
+        delivery_notify.clone(),
     )?);
 
     drop(schedule_worker::start(
@@ -126,6 +134,8 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
             batch_size: 32,
         },
         Arc::new(crate::metrics::Metrics::new()),
+        schedule_notify.clone(),
+        delivery_notify.clone(),
     ));
 
     let base_url: Arc<str> = config.base_url().into();
@@ -137,6 +147,8 @@ pub async fn start(pool: PgPool, database_url: String) -> anyhow::Result<TestSer
         coalescer: None,
         signer,
         metrics: Arc::new(crate::metrics::Metrics::new()),
+        delivery_notify,
+        schedule_notify,
     };
     let app = crate::build_router(state);
 
